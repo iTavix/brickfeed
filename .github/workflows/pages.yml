@@ -28,5 +28,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
+      # Pages a volte risponde "Deployment failed, try again later": un secondo
+      # tentativo dopo una breve attesa risolve senza intervento manuale.
       - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+      - id: retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
