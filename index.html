@@ -158,17 +158,7 @@
   .chip.active { background: var(--text); color: var(--bg); }
   .chip .dot { width:8px; height:8px; border-radius:50%; }
 
-  #igRow { display:flex; gap:14px; overflow-x:auto; padding: 2px 0 14px; scrollbar-width:none; }
-  #igRow::-webkit-scrollbar { display:none; }
-  #igRow:empty { display:none; }
-  .igItem { display:flex; flex-direction:column; align-items:center; gap:6px; flex-shrink:0; width:64px; }
-  .igItem .ring {
-    width: 58px; height: 58px; border-radius: 50%;
-    display:flex; align-items:center; justify-content:center;
-    font-size: 22px; font-weight: 700; color:#fff;
-    box-shadow: var(--shadow);
-  }
-  .igItem span { font-size: 11px; color: var(--text2); max-width: 64px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chip.quick svg { width:15px; height:15px; }
 
   /* ---------- Cards ---------- */
   .card {
@@ -406,7 +396,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></svg>
       <input id="search" type="search" placeholder="Cerca nelle notizie" autocomplete="off">
     </div>
-    <div id="igRow"></div>
     <div id="chips"></div>
     <div id="srcErrors"></div>
     <div id="feedList"></div>
@@ -837,6 +826,7 @@ const ICONS = {
   saveFill: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4h11a1 1 0 0 1 1 1v15.2l-6.5-4.4-6.5 4.4V5a1 1 0 0 1 1-1z"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5h15M9.5 6.5V4.8a1.3 1.3 0 0 1 1.3-1.3h2.4a1.3 1.3 0 0 1 1.3 1.3v1.7M6.5 6.5l.8 12.4a1.6 1.6 0 0 0 1.6 1.6h6.2a1.6 1.6 0 0 0 1.6-1.6l.8-12.4"/></svg>',
   inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="3.5"/><path d="M3.5 13.5H8l1.5 2.5h5l1.5-2.5h4.5"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="4.5"/><circle cx="12" cy="12" r="3.6"/><circle cx="16.7" cy="7.3" r="0.5" fill="currentColor" stroke="none"/></svg>',
 };
 
 function srcOf(id) { return state.sources.find(s => s.id === id); }
@@ -870,22 +860,17 @@ function cardHTML(item, savedTab) {
 }
 
 function renderFeed() {
-  // chips
+  // chips: filtri per le fonti con feed + apertura rapida per profili social e link
   const chips = [`<button class="chip ${state.filter === 'all' ? 'active' : ''}" data-f="all">Tutte</button>`]
     .concat(state.sources.filter(s => s.type === 'reddit' || s.type === 'rss').map(s =>
-      `<button class="chip ${state.filter === s.id ? 'active' : ''}" data-f="${s.id}"><span class="dot" style="background:${s.color}"></span>${esc(s.name)}</button>`));
+      `<button class="chip ${state.filter === s.id ? 'active' : ''}" data-f="${s.id}"><span class="dot" style="background:${s.color}"></span>${esc(s.name)}</button>`))
+    .concat(state.sources.filter(s => s.type === 'instagram' || s.type === 'link').map(s => {
+      const url = s.type === 'instagram'
+        ? 'https://www.instagram.com/' + s.value.replace(/^@/, '') + '/'
+        : (/^https?:\/\//i.test(s.value) ? s.value : 'https://' + s.value);
+      return `<button class="chip quick" data-url="${esc(url)}" title="${esc(s.name)}"><span class="dot" style="background:${s.color}"></span>${s.type === 'instagram' ? ICONS.camera : ICONS.open}</button>`;
+    }));
   $('#chips').innerHTML = chips.join('');
-
-  // quick access (social profiles & quick links)
-  $('#igRow').innerHTML = state.sources.filter(s => s.type === 'instagram' || s.type === 'link').map(s => {
-    const url = s.type === 'instagram'
-      ? 'https://www.instagram.com/' + s.value.replace(/^@/, '') + '/'
-      : (/^https?:\/\//i.test(s.value) ? s.value : 'https://' + s.value);
-    return `<button class="igItem" data-url="${esc(url)}">
-      <span class="ring" style="background:${s.color}">${esc(s.name.charAt(0).toUpperCase())}</span>
-      <span>${esc(s.name)}</span>
-    </button>`;
-  }).join('');
 
   // errors
   $('#srcErrors').innerHTML = Object.values(state.errors).map(e => `<div class="srcErr">${esc(e)}</div>`).join('');
@@ -1110,13 +1095,9 @@ $('#search').addEventListener('input', e => { state.search = e.target.value.trim
 
 $('#chips').addEventListener('click', e => {
   const b = e.target.closest('.chip'); if (!b) return;
+  if (b.dataset.url) { window.open(b.dataset.url, '_blank'); return; }
   state.filter = b.dataset.f;
   renderFeed();
-});
-
-$('#igRow').addEventListener('click', e => {
-  const b = e.target.closest('.igItem'); if (!b) return;
-  window.open(b.dataset.url, '_blank');
 });
 
 function handleCardAction(e, savedTab) {
