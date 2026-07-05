@@ -13,6 +13,19 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <title>BrickFeed</title>
+<script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-auth-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
+<script>
+  window.FIREBASE_CONFIG = {
+    apiKey: "AIzaSyAKbFfeV4NCPyBqUri73FBCFC4WvtCyn2U",
+    authDomain: "brickboy-b008e.firebaseapp.com",
+    projectId: "brickboy-b008e",
+    storageBucket: "brickboy-b008e.firebasestorage.app",
+    messagingSenderId: "974319322525",
+    appId: "1:974319322525:web:cc322557263ba2f4105b74"
+  };
+</script>
 <style>
   :root {
     --bg: #f2f2f7;
@@ -411,7 +424,7 @@
     <div class="group">
       <h3>Fonti</h3>
       <div class="panel" id="srcPanel"></div>
-      <div class="hint">Le fonti sono salvate solo in locale su questo dispositivo.</div>
+      <div class="hint">Le fonti restano solo tue: su questo dispositivo e, se accedi, sincronizzate sul tuo account.</div>
     </div>
     <div class="group">
       <h3>Aggiornamento e avvisi</h3>
@@ -442,6 +455,11 @@
         </div>
       </div>
       <div class="hint">Aggiunti in fondo a ogni caption copiata. I nomi delle fonti vengono sempre rimossi automaticamente dal testo.</div>
+    </div>
+    <div class="group">
+      <h3>Account e sincronizzazione</h3>
+      <div class="panel" id="accountPanel"></div>
+      <div class="hint">Accedi con lo stesso account su tutti i tuoi dispositivi: fonti, notizie salvate, letture e impostazioni restano sincronizzate.</div>
     </div>
     <div class="group">
       <h3>Dati</h3>
@@ -506,7 +524,7 @@ const state = {
   refreshing: false,
 };
 
-function persist() {
+function persistLocal() {
   store.set('sources', state.sources);
   store.set('seen', [...state.seen].slice(-3000));
   store.set('saved', state.saved);
@@ -515,6 +533,7 @@ function persist() {
   store.set('settings', state.settings);
   store.set('firstRun', state.firstRun);
 }
+function persist() { persistLocal(); scheduleSync(); }
 
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
 const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return 'h' + (h >>> 0).toString(36); };
@@ -909,6 +928,28 @@ function renderSettings() {
     </div>`);
   rows.push(`<div class="prow tappable" id="srcAdd"><div class="grow"><b class="txtbtn" style="color:var(--accent)">＋ Aggiungi fonte</b></div></div>`);
   $('#srcPanel').innerHTML = rows.join('');
+
+  // account & sync
+  if (!SYNC.available) {
+    $('#accountPanel').innerHTML = `<div class="prow"><div class="grow"><b>Sincronizzazione non disponibile</b><small>Controlla la connessione e ricarica l'app</small></div></div>`;
+  } else if (SYNC.user) {
+    $('#accountPanel').innerHTML = `
+      <div class="prow">
+        <span class="dot" style="background:${SYNC.error ? 'var(--danger)' : '#34c759'}"></span>
+        <div class="grow"><b>${esc(SYNC.user.email || '')}</b><small>${esc(SYNC.error || 'Sincronizzazione attiva')}</small></div>
+        <button class="txtbtn red" id="accLogout">Esci</button>
+      </div>`;
+  } else {
+    $('#accountPanel').innerHTML = `
+      <div class="prow" style="display:block; padding:14px 16px;">
+        <input id="accEmail" type="email" placeholder="Email" autocomplete="email" autocapitalize="off">
+        <input id="accPass" type="password" placeholder="Password" autocomplete="current-password" style="margin-top:8px;">
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button class="bigbtn" id="accLogin" style="margin:0; padding:12px;">Accedi</button>
+          <button class="bigbtn secondary" id="accSignup" style="margin:0; padding:12px;">Crea account</button>
+        </div>
+      </div>`;
+  }
   $('#setPoll').value = String(state.settings.poll);
   $('#setTags').value = state.settings.tags || '';
   $('#setNotif').checked = state.settings.notif && ('Notification' in window) && Notification.permission === 'granted';
@@ -1095,6 +1136,122 @@ function sheetManual() {
   });
 }
 
+/* ============================== Sync (Firebase) ============================== */
+const SYNC = {
+  auth: null, db: null, user: null, unsub: null, pushTimer: null,
+  available: false, error: '',
+  deviceId: (() => { let d = store.get('device', null); if (!d) { d = uid(); store.set('device', d); } return d; })(),
+};
+
+function syncDocRef() { return SYNC.db.collection('brickfeed').doc(SYNC.user.uid); }
+
+function initSync() {
+  if (typeof firebase === 'undefined' || !window.FIREBASE_CONFIG?.apiKey) return;
+  try {
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+    SYNC.auth = firebase.auth();
+    SYNC.db = firebase.firestore();
+    // Safari/WebKit blocca il trasporto WebChannel di Firestore: il long-polling
+    // forzato è la configurazione più robusta (va impostato prima di ogni altra operazione).
+    try { SYNC.db.settings({ experimentalForceLongPolling: true }); } catch (_) {}
+    SYNC.available = true;
+    SYNC.auth.onAuthStateChanged(u => {
+      SYNC.user = u;
+      SYNC.error = '';
+      if (u) startSyncListener(); else stopSyncListener();
+      if (state.tab === 'settings') renderSettings();
+    });
+  } catch (e) { console.warn('firebase init', e); }
+}
+
+function stopSyncListener() { if (SYNC.unsub) { SYNC.unsub(); SYNC.unsub = null; } }
+
+function startSyncListener() {
+  stopSyncListener();
+  SYNC.unsub = syncDocRef().onSnapshot(snap => {
+    if (!snap.exists) { pushSync(); return; }          // primo dispositivo: semina il cloud
+    const d = snap.data() || {};
+    if (d.deviceId === SYNC.deviceId) return;          // eco della propria scrittura
+    applyRemote(d);
+  }, err => {
+    SYNC.error = err.code === 'permission-denied'
+      ? 'Permessi Firestore mancanti: aggiungi le regole per "brickfeed" nella console.'
+      : 'Errore di sincronizzazione: ' + (err.code || err.message);
+    console.warn('sync listen', err);
+    if (state.tab === 'settings') renderSettings();
+  });
+}
+
+function applyRemote(d) {
+  const hadSources = state.sources.length > 0;
+  if (Array.isArray(d.sources)) state.sources = d.sources;
+  if (Array.isArray(d.saved)) state.saved = d.saved;
+  if (Array.isArray(d.manual)) state.manual = d.manual;
+  if (Array.isArray(d.seen)) d.seen.forEach(id => state.seen.add(id));   // unione, mai perdere letture
+  if (d.settings) {
+    if (d.settings.poll) state.settings.poll = d.settings.poll;
+    if (typeof d.settings.tags === 'string') state.settings.tags = d.settings.tags;
+  }
+  if (state.sources.length) state.firstRun = false;
+  persistLocal();                                       // solo locale: niente rimbalzo verso il cloud
+  render();
+  startPolling();
+  if (!hadSources && state.sources.length) refreshAll(true);
+}
+
+function scheduleSync() {
+  if (!SYNC.user) return;
+  clearTimeout(SYNC.pushTimer);
+  SYNC.pushTimer = setTimeout(pushSync, 1500);
+}
+
+function pushSync() {
+  if (!SYNC.user) return;
+  syncDocRef().set({
+    deviceId: SYNC.deviceId,
+    sources: state.sources,
+    saved: state.saved,
+    manual: state.manual,
+    seen: [...state.seen].slice(-3000),
+    settings: { poll: state.settings.poll, tags: state.settings.tags || '' },  // notifiche restano per-dispositivo
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }).then(() => {
+    if (SYNC.error) { SYNC.error = ''; if (state.tab === 'settings') renderSettings(); }
+  }).catch(e => {
+    SYNC.error = e.code === 'permission-denied'
+      ? 'Permessi Firestore mancanti: aggiungi le regole per "brickfeed" nella console.'
+      : 'Errore di sincronizzazione: ' + (e.code || e.message);
+    console.warn('sync push', e);
+    if (state.tab === 'settings') renderSettings();
+  });
+}
+
+const AUTH_ERRORS = {
+  'auth/invalid-email': 'Email non valida.',
+  'auth/user-not-found': 'Nessun account con questa email.',
+  'auth/wrong-password': 'Password errata.',
+  'auth/invalid-credential': 'Email o password errate.',
+  'auth/email-already-in-use': 'Esiste già un account con questa email.',
+  'auth/weak-password': 'Password troppo corta (minimo 6 caratteri).',
+  'auth/network-request-failed': 'Nessuna connessione.',
+  'auth/too-many-requests': 'Troppi tentativi, riprova tra poco.',
+};
+
+async function doAuth(mode) {
+  const email = $('#accEmail').value.trim();
+  const pass = $('#accPass').value;
+  if (!email || !pass) { toast('Inserisci email e password'); return; }
+  try {
+    if (mode === 'signup') await SYNC.auth.createUserWithEmailAndPassword(email, pass);
+    else await SYNC.auth.signInWithEmailAndPassword(email, pass);
+    toast('Accesso effettuato ✓');
+  } catch (e) {
+    toast(AUTH_ERRORS[e.code] || 'Errore: ' + (e.code || e.message));
+  }
+}
+
+window.addEventListener('load', initSync);
+
 /* ============================== Events ============================== */
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   state.tab = t.dataset.tab;
@@ -1204,13 +1361,24 @@ $('#setNotif').addEventListener('change', async e => {
   persist(); renderSettings();
 });
 
+$('#accountPanel').addEventListener('click', e => {
+  if (e.target.closest('#accLogin')) doAuth('login');
+  else if (e.target.closest('#accSignup')) doAuth('signup');
+  else if (e.target.closest('#accLogout')) {
+    confirmSheet('Uscire dall\'account? I dati restano su questo dispositivo e nel cloud.', 'Esci').then(ok => {
+      if (ok) { SYNC.auth.signOut(); toast('Sei uscito'); }
+    });
+  }
+});
+
 $('#btnExport').addEventListener('click', () => {
   const cfg = state.sources.map(s => ({ type: s.type, name: s.name, value: s.value, feed: s.feed || undefined, color: s.color }));
   copyText(JSON.stringify(cfg, null, 2), 'Configurazione copiata ✓');
 });
 
 $('#btnReset').addEventListener('click', async () => {
-  if (!await confirmSheet('Fonti, notizie salvate e impostazioni andranno perse per sempre.', 'Azzera tutto')) return;
+  if (!await confirmSheet('Fonti, notizie salvate e impostazioni andranno perse su questo dispositivo. I dati nel cloud e sugli altri dispositivi restano.', 'Azzera tutto')) return;
+  if (SYNC.user) { stopSyncListener(); clearTimeout(SYNC.pushTimer); try { await SYNC.auth.signOut(); } catch (_) {} }
   Object.keys(localStorage).filter(k => k.startsWith('bf_')).forEach(k => localStorage.removeItem(k));
   if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
   location.reload();
