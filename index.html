@@ -17,14 +17,9 @@
 <script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-auth-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
 <script>
-  window.FIREBASE_CONFIG = {
-    apiKey: "AIzaSyAKbFfeV4NCPyBqUri73FBCFC4WvtCyn2U",
-    authDomain: "brickboy-b008e.firebaseapp.com",
-    projectId: "brickboy-b008e",
-    storageBucket: "brickboy-b008e.firebasestorage.app",
-    messagingSenderId: "974319322525",
-    appId: "1:974319322525:web:cc322557263ba2f4105b74"
-  };
+  // Configurazione del progetto Firebase dedicato a BrickFeed.
+  // Finché è vuota, l'app funziona normalmente senza sincronizzazione.
+  window.FIREBASE_CONFIG = null;
 </script>
 <style>
   :root {
@@ -456,7 +451,7 @@
       </div>
       <div class="hint">Aggiunti in fondo a ogni caption copiata. I nomi delle fonti vengono sempre rimossi automaticamente dal testo.</div>
     </div>
-    <div class="group">
+    <div class="group" id="accountGroup">
       <h3>Account e sincronizzazione</h3>
       <div class="panel" id="accountPanel"></div>
       <div class="hint">Accedi con lo stesso account su tutti i tuoi dispositivi: fonti, notizie salvate, letture e impostazioni restano sincronizzate.</div>
@@ -929,8 +924,12 @@ function renderSettings() {
   rows.push(`<div class="prow tappable" id="srcAdd"><div class="grow"><b class="txtbtn" style="color:var(--accent)">＋ Aggiungi fonte</b></div></div>`);
   $('#srcPanel').innerHTML = rows.join('');
 
-  // account & sync
-  if (!SYNC.available) {
+  // account & sync (sezione visibile solo con un progetto Firebase configurato)
+  const configured = !!window.FIREBASE_CONFIG?.apiKey;
+  $('#accountGroup').hidden = !configured;
+  if (!configured) {
+    // niente da mostrare
+  } else if (!SYNC.available) {
     $('#accountPanel').innerHTML = `<div class="prow"><div class="grow"><b>Sincronizzazione non disponibile</b><small>Controlla la connessione e ricarica l'app</small></div></div>`;
   } else if (SYNC.user) {
     $('#accountPanel').innerHTML = `

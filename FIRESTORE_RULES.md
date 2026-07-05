@@ -1,8 +1,8 @@
 # Regole Firestore per BrickFeed
 
-L'`apiKey` Firebase nel sorgente è pubblica per design: **le regole di sicurezza
-Firestore sono l'unica vera barriera** sui dati. Da applicare nella console
-Firebase (progetto `brickboy-b008e`) → Firestore Database → Rules.
+BrickFeed usa un progetto Firebase dedicato. L'`apiKey` nel sorgente è pubblica
+per design: **le regole di sicurezza Firestore sono l'unica vera barriera** sui
+dati. Da applicare nella console Firebase → Firestore Database → Rules.
 
 ## Modello dati
 
@@ -10,17 +10,18 @@ Firebase (progetto `brickboy-b008e`) → Firestore Database → Rules.
   notizie manuali, ID delle notizie lette e impostazioni. Scritto e letto solo
   dal proprietario.
 
-## Regola da aggiungere
-
-Dentro il blocco `match /databases/{database}/documents { … }` già esistente
-(insieme alle regole di HourFlow), aggiungere:
+## Regole complete (sostituire tutto il contenuto)
 
 ```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
     // BrickFeed: dati personali dell'utente, barriera = uid.
     match /brickfeed/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+  }
+}
 ```
 
-Dopo la modifica premere **Publish**. Nessun'altra configurazione è necessaria:
-l'autenticazione email/password è già attiva nel progetto.
+Dopo la modifica premere **Publish**.
