@@ -17,9 +17,16 @@
 <script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-auth-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
 <script>
-  // Configurazione del progetto Firebase dedicato a BrickFeed.
-  // Finché è vuota, l'app funziona normalmente senza sincronizzazione.
-  window.FIREBASE_CONFIG = null;
+  // Progetto Firebase dedicato a BrickFeed. L'apiKey è pubblica per design:
+  // la protezione dei dati sono le regole Firestore (vedi FIRESTORE_RULES.md).
+  window.FIREBASE_CONFIG = {
+    apiKey: "AIzaSyCrSeixZzCur86sZFa2Ddkqcqg8CWk9cGU",
+    authDomain: "brickfeed-d595f.firebaseapp.com",
+    projectId: "brickfeed-d595f",
+    storageBucket: "brickfeed-d595f.firebasestorage.app",
+    messagingSenderId: "228964473237",
+    appId: "1:228964473237:web:a7882ccb3f77c5bcb7be9c"
+  };
 </script>
 <style>
   :root {
