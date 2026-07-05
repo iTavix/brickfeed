@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BrickFeed">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<title>BrickFeed</title>
+<style>
+  :root {
+    --bg: #f2f2f7;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --text2: #6e6e73;
+    --text3: #aeaeb2;
+    --sep: rgba(60,60,67,.12);
+    --accent: #007aff;
+    --accent-soft: rgba(0,122,255,.12);
+    --danger: #ff3b30;
+    --chip: #e9e9ee;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.05);
+    --tabbar-bg: rgba(249,249,251,.82);
+    --topbar-bg: rgba(242,242,247,.85);
+    --radius: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --card: #1c1c1e;
+      --text: #f5f5f7;
+      --text2: #98989e;
+      --text3: #636369;
+      --sep: rgba(84,84,88,.4);
+      --accent: #0a84ff;
+      --accent-soft: rgba(10,132,255,.18);
+      --danger: #ff453a;
+      --chip: #2c2c2e;
+      --shadow: 0 1px 2px rgba(0,0,0,.3);
+      --tabbar-bg: rgba(18,18,20,.82);
+      --topbar-bg: rgba(0,0,0,.8);
+    }
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html { height:100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: contain;
+  }
+  button { font: inherit; color: inherit; background:none; border:none; cursor:pointer; }
+  input, select, textarea {
+    font: inherit; color: var(--text);
+    background: var(--chip);
+    border: none; border-radius: 12px;
+    padding: 12px 14px; width: 100%;
+    outline: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
+  svg { display:block; }
+
+  /* ---------- Layout ---------- */
+  #topbar {
+    position: fixed; top:0; left:0; right:0; z-index: 40;
+    padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+    background: var(--topbar-bg);
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    border-bottom: .5px solid var(--sep);
+    display:flex; align-items:center; gap:10px;
+  }
+  #topbar h1 { font-size: 22px; font-weight: 700; letter-spacing: -.4px; flex:1; }
+  .iconbtn {
+    width: 40px; height: 40px; border-radius: 50%;
+    display:flex; align-items:center; justify-content:center;
+    color: var(--accent);
+    transition: background .15s;
+  }
+  .iconbtn:active { background: var(--accent-soft); }
+  .iconbtn svg { width:21px; height:21px; }
+  .iconbtn.spinning svg { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #unreadPill {
+    background: var(--danger); color:#fff;
+    font-size: 13px; font-weight: 600;
+    padding: 3px 9px; border-radius: 20px;
+    display:none;
+  }
+  #unreadPill.on { display:inline-block; }
+
+  main {
+    max-width: 680px; margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 68px) 16px calc(env(safe-area-inset-bottom) + 92px);
+  }
+
+  #tabbar {
+    position: fixed; bottom:0; left:0; right:0; z-index: 40;
+    display:flex; justify-content: space-around;
+    background: var(--tabbar-bg);
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    border-top: .5px solid var(--sep);
+    padding: 6px 8px calc(env(safe-area-inset-bottom) + 6px);
+  }
+  .tab {
+    flex:1; max-width: 130px;
+    display:flex; flex-direction:column; align-items:center; gap:2px;
+    color: var(--text3); font-size: 10.5px; font-weight: 500;
+    padding: 5px 0; position: relative;
+  }
+  .tab svg { width:25px; height:25px; }
+  .tab.active { color: var(--accent); }
+  .tab .badge {
+    position:absolute; top:0; left: calc(50% + 6px);
+    background: var(--danger); color:#fff;
+    font-size:11px; font-weight:600; line-height:1;
+    padding: 3px 6px; border-radius: 10px;
+    display:none;
+  }
+  .tab .badge.on { display:block; }
+
+  .view { display:none; }
+  .view.active { display:block; }
+
+  /* ---------- Feed controls ---------- */
+  #searchWrap { position: relative; margin-bottom: 12px; }
+  #searchWrap svg {
+    position:absolute; left:13px; top:50%; transform:translateY(-50%);
+    width:16px; height:16px; color: var(--text3);
+  }
+  #search { padding-left: 38px; background: var(--chip); border-radius: 12px; }
+
+  #chips {
+    display:flex; gap:8px; overflow-x:auto; padding: 2px 0 12px;
+    scrollbar-width: none;
+  }
+  #chips::-webkit-scrollbar { display:none; }
+  .chip {
+    flex-shrink:0;
+    display:flex; align-items:center; gap:6px;
+    background: var(--card); color: var(--text2);
+    font-size: 14px; font-weight: 500;
+    padding: 8px 14px; border-radius: 20px;
+    box-shadow: var(--shadow);
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  .chip.active { background: var(--text); color: var(--bg); }
+  .chip .dot { width:8px; height:8px; border-radius:50%; }
+
+  #igRow { display:flex; gap:14px; overflow-x:auto; padding: 2px 0 14px; scrollbar-width:none; }
+  #igRow::-webkit-scrollbar { display:none; }
+  #igRow:empty { display:none; }
+  .igItem { display:flex; flex-direction:column; align-items:center; gap:6px; flex-shrink:0; width:64px; }
+  .igItem .ring {
+    width: 58px; height: 58px; border-radius: 50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size: 22px; font-weight: 700; color:#fff;
+    box-shadow: var(--shadow);
+  }
+  .igItem span { font-size: 11px; color: var(--text2); max-width: 64px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ---------- Cards ---------- */
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 14px;
+    overflow: hidden;
+    animation: fadeUp .25s ease both;
+  }
+  @keyframes fadeUp { from { opacity:0; transform: translateY(6px);} to { opacity:1; transform:none;} }
+  .card.new { box-shadow: 0 0 0 1.5px var(--accent), var(--shadow); }
+  .card img.hero { width:100%; max-height: 340px; object-fit: cover; background: var(--chip); }
+  .card .body { padding: 14px 16px 8px; }
+  .card .meta {
+    display:flex; align-items:center; gap:7px;
+    font-size: 12.5px; font-weight: 600; color: var(--text2);
+    margin-bottom: 7px;
+  }
+  .card .meta .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .card .meta .time { font-weight: 400; color: var(--text3); margin-left:auto; flex-shrink:0; }
+  .card .meta .newtag {
+    background: var(--accent); color:#fff;
+    font-size: 10.5px; font-weight: 700; letter-spacing:.4px;
+    padding: 2px 7px; border-radius: 8px;
+  }
+  .card h2 { font-size: 17.5px; font-weight: 650; letter-spacing:-.2px; line-height: 1.32; }
+  .card .txt {
+    margin-top: 7px; font-size: 15px; line-height: 1.45; color: var(--text2);
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    white-space: pre-line;
+  }
+  .card .txt.open { display:block; -webkit-line-clamp: unset; }
+  .card .more { font-size: 13.5px; font-weight: 600; color: var(--accent); padding: 6px 0 2px; }
+  .card .actions {
+    display:flex; align-items:center;
+    border-top: .5px solid var(--sep);
+    margin-top: 10px; padding: 4px 6px;
+  }
+  .abtn {
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding: 8px 2px; border-radius: 10px;
+    font-size: 10.5px; font-weight: 500; color: var(--text2);
+    transition: background .15s;
+  }
+  .abtn svg { width:19px; height:19px; }
+  .abtn:active { background: var(--chip); }
+  .abtn.saved { color: var(--accent); }
+  .abtn.del { color: var(--danger); }
+
+  .empty {
+    text-align:center; color: var(--text3);
+    padding: 70px 30px; font-size: 15px; line-height:1.5;
+  }
+  .empty svg { width:44px; height:44px; margin: 0 auto 14px; color: var(--text3); }
+
+  .rowline {
+    display:flex; align-items:center; gap:8px; margin-bottom: 4px;
+  }
+  .minibtn {
+    font-size: 13px; font-weight: 600; color: var(--accent);
+    background: var(--accent-soft);
+    padding: 6px 12px; border-radius: 16px;
+  }
+
+  /* Source status errors */
+  #srcErrors { margin-bottom: 12px; display:flex; flex-direction:column; gap:6px; }
+  .srcErr {
+    font-size: 13px; color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    border-radius: 10px; padding: 8px 12px;
+  }
+
+  /* ---------- Settings ---------- */
+  .group { margin-bottom: 26px; }
+  .group > h3 {
+    font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing:.5px;
+    color: var(--text2); margin: 0 4px 8px;
+  }
+  .panel { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow:hidden; }
+  .prow {
+    display:flex; align-items:center; gap:12px;
+    padding: 13px 16px;
+    border-bottom: .5px solid var(--sep);
+    min-height: 50px;
+  }
+  .prow:last-child { border-bottom:none; }
+  .prow .grow { flex:1; min-width:0; }
+  .prow .grow b { font-size: 15.5px; font-weight: 600; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prow .grow small { font-size: 12.5px; color: var(--text3); }
+  .prow .dot { width:11px; height:11px; border-radius:50%; flex-shrink:0; }
+  .prow select { width:auto; background:transparent; padding: 6px 4px; color: var(--accent); font-weight:600; text-align:right; }
+  .prow .txtbtn { color: var(--accent); font-weight: 500; font-size: 15px; }
+  .prow .txtbtn.red { color: var(--danger); }
+  .prow.tappable:active { background: var(--chip); }
+  .hint { font-size: 12.5px; color: var(--text3); margin: 8px 6px 0; line-height:1.45; }
+
+  /* iOS switch */
+  .switch { position:relative; width:51px; height:31px; flex-shrink:0; }
+  .switch input { position:absolute; opacity:0; width:100%; height:100%; margin:0; }
+  .switch .knob {
+    position:absolute; inset:0; border-radius:31px;
+    background: var(--chip); transition: background .2s;
+  }
+  .switch .knob::after {
+    content:""; position:absolute; top:2px; left:2px;
+    width:27px; height:27px; border-radius:50%;
+    background:#fff; box-shadow: 0 2px 5px rgba(0,0,0,.25);
+    transition: transform .2s;
+  }
+  .switch input:checked + .knob { background: #34c759; }
+  .switch input:checked + .knob::after { transform: translateX(20px); }
+
+  /* ---------- Onboarding ---------- */
+  #view-onboarding { padding-top: 8vh; text-align:center; }
+  #view-onboarding .appicon {
+    width: 88px; height: 88px; border-radius: 22px;
+    margin: 0 auto 22px; box-shadow: var(--shadow);
+  }
+  #view-onboarding h1 { font-size: 30px; font-weight: 800; letter-spacing: -.6px; margin-bottom: 10px; }
+  #view-onboarding p { color: var(--text2); font-size: 16px; line-height: 1.5; max-width: 320px; margin: 0 auto 34px; }
+  .bigbtn {
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    width: 100%; max-width: 340px; margin: 0 auto 12px;
+    background: var(--accent); color:#fff;
+    font-size: 16.5px; font-weight: 600;
+    padding: 15px; border-radius: 14px;
+    transition: transform .1s;
+  }
+  .bigbtn:active { transform: scale(.97); }
+  .bigbtn.secondary { background: var(--card); color: var(--accent); box-shadow: var(--shadow); }
+  .bigbtn svg { width:19px; height:19px; }
+
+  /* ---------- Modal ---------- */
+  #modalRoot { position: fixed; inset:0; z-index: 100; display:none; }
+  #modalRoot.open { display:block; }
+  #modalRoot .scrim { position:absolute; inset:0; background: rgba(0,0,0,.4); animation: fade .2s both; }
+  @keyframes fade { from{opacity:0} to{opacity:1} }
+  .sheet {
+    position:absolute; left:0; right:0; bottom:0;
+    max-width: 680px; margin: 0 auto;
+    background: var(--card);
+    border-radius: 20px 20px 0 0;
+    padding: 10px 20px calc(env(safe-area-inset-bottom) + 20px);
+    max-height: 88dvh; overflow-y: auto;
+    animation: slideUp .28s cubic-bezier(.3,1.2,.4,1) both;
+  }
+  @keyframes slideUp { from { transform: translateY(60%); opacity:.6;} to { transform:none; opacity:1;} }
+  .sheet .grab { width:38px; height:5px; border-radius:3px; background: var(--sep); margin: 4px auto 14px; }
+  .sheet h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; letter-spacing:-.3px; }
+  .sheet label { display:block; font-size: 13px; font-weight:600; color: var(--text2); margin: 14px 4px 6px; }
+  .sheet textarea { min-height: 100px; resize: vertical; }
+  .seg {
+    display:flex; background: var(--chip); border-radius: 11px; padding: 2.5px; margin-bottom: 4px;
+  }
+  .seg button {
+    flex:1; padding: 8px 4px; border-radius: 9px;
+    font-size: 14px; font-weight: 550; color: var(--text2);
+    transition: all .15s;
+  }
+  .seg button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+  .sheet .bigbtn { margin-top: 22px; max-width:none; }
+
+  /* ---------- Toast & PTR ---------- */
+  #toast {
+    position: fixed; left:50%; bottom: calc(env(safe-area-inset-bottom) + 100px);
+    transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--bg);
+    font-size: 14.5px; font-weight: 600;
+    padding: 11px 20px; border-radius: 24px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    opacity:0; pointer-events:none;
+    transition: all .25s; z-index: 200;
+    max-width: 86vw; text-align:center;
+  }
+  #toast.show { opacity:1; transform: translateX(-50%); }
+
+  #ptr {
+    position: fixed; top: calc(env(safe-area-inset-top) + 62px); left:50%;
+    transform: translateX(-50%) scale(0); z-index: 30;
+    width: 34px; height: 34px; border-radius:50%;
+    background: var(--card); box-shadow: var(--shadow);
+    display:flex; align-items:center; justify-content:center;
+    color: var(--accent);
+    transition: transform .2s;
+  }
+  #ptr.show { transform: translateX(-50%) scale(1); }
+  #ptr svg { width:17px; height:17px; }
+  #ptr.spin svg { animation: spin .8s linear infinite; }
+
+  #fab {
+    position: fixed; right: 18px; bottom: calc(env(safe-area-inset-bottom) + 96px);
+    width: 54px; height: 54px; border-radius: 50%;
+    background: var(--accent); color:#fff;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow: 0 6px 20px rgba(0,0,0,.22);
+    z-index: 35; transition: transform .12s;
+  }
+  #fab:active { transform: scale(.92); }
+  #fab svg { width:23px; height:23px; }
+  #fab.hidden { display:none; }
+</style>
+</head>
+<body>
+
+<div id="ptr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 3.5V8h-4.5"/></svg></div>
+
+<header id="topbar" hidden>
+  <h1>BrickFeed</h1>
+  <span id="unreadPill"></span>
+  <button class="iconbtn" id="btnMarkRead" title="Segna tutto come letto">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+  </button>
+  <button class="iconbtn" id="btnRefresh" title="Aggiorna">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 3.5V8h-4.5"/></svg>
+  </button>
+</header>
+
+<main>
+  <!-- Onboarding -->
+  <section class="view" id="view-onboarding">
+    <svg class="appicon" viewBox="0 0 88 88"><rect width="88" height="88" rx="22" fill="#1d1d1f"/><circle cx="32" cy="32" r="9" fill="none" stroke="#f5f5f7" stroke-width="3.5"/><circle cx="56" cy="32" r="9" fill="none" stroke="#f5f5f7" stroke-width="3.5"/><circle cx="32" cy="56" r="9" fill="none" stroke="#f5f5f7" stroke-width="3.5"/><circle cx="56" cy="56" r="9" fill="#f5f5f7"/></svg>
+    <h1>BrickFeed</h1>
+    <p>Le tue notizie, in un unico posto. Aggiungi le fonti che vuoi seguire: restano salvate solo su questo dispositivo.</p>
+    <button class="bigbtn" id="obAdd">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Aggiungi una fonte
+    </button>
+    <button class="bigbtn secondary" id="obImport">Importa configurazione</button>
+  </section>
+
+  <!-- Feed -->
+  <section class="view" id="view-feed">
+    <div id="searchWrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></svg>
+      <input id="search" type="search" placeholder="Cerca nelle notizie" autocomplete="off">
+    </div>
+    <div id="igRow"></div>
+    <div id="chips"></div>
+    <div id="srcErrors"></div>
+    <div id="feedList"></div>
+  </section>
+
+  <!-- Saved -->
+  <section class="view" id="view-saved">
+    <div id="savedList"></div>
+  </section>
+
+  <!-- Settings -->
+  <section class="view" id="view-settings">
+    <div class="group">
+      <h3>Fonti</h3>
+      <div class="panel" id="srcPanel"></div>
+      <div class="hint">Le fonti sono salvate solo in locale su questo dispositivo.</div>
+    </div>
+    <div class="group">
+      <h3>Aggiornamento e avvisi</h3>
+      <div class="panel">
+        <div class="prow">
+          <div class="grow"><b>Controlla ogni</b></div>
+          <select id="setPoll">
+            <option value="5">5 min</option>
+            <option value="10">10 min</option>
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+            <option value="60">60 min</option>
+          </select>
+        </div>
+        <div class="prow">
+          <div class="grow"><b>Notifiche</b><small id="notifState"></small></div>
+          <label class="switch"><input type="checkbox" id="setNotif"><span class="knob"></span></label>
+        </div>
+      </div>
+      <div class="hint">Le notifiche funzionano mentre l'app è aperta (su iPhone: aggiungi l'app alla schermata Home). Il pallino rosso segnala sempre le novità.</div>
+    </div>
+    <div class="group">
+      <h3>Caption Instagram</h3>
+      <div class="panel">
+        <div class="prow" style="display:block; padding:14px 16px;">
+          <b style="font-size:15.5px; font-weight:600;">Hashtag da aggiungere</b>
+          <textarea id="setTags" rows="3" style="margin-top:10px;" placeholder="#esempio #hashtag"></textarea>
+        </div>
+      </div>
+      <div class="hint">Aggiunti in fondo a ogni caption copiata. I nomi delle fonti vengono sempre rimossi automaticamente dal testo.</div>
+    </div>
+    <div class="group">
+      <h3>Dati</h3>
+      <div class="panel">
+        <div class="prow tappable" id="btnExport"><div class="grow"><b class="txtbtn" style="color:var(--accent)">Esporta configurazione fonti</b></div></div>
+        <div class="prow tappable" id="btnImport2"><div class="grow"><b class="txtbtn" style="color:var(--accent)">Importa configurazione</b></div></div>
+        <div class="prow tappable" id="btnReset"><div class="grow"><b class="txtbtn" style="color:var(--danger)">Azzera tutto</b></div></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<button id="fab" title="Aggiungi notizia">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+</button>
+
+<nav id="tabbar" hidden>
+  <button class="tab active" data-tab="feed">
+    <span class="badge" id="feedBadge"></span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="3.5"/><path d="M7.5 9h9M7.5 12.5h9M7.5 16h5.5"/></svg>
+    Feed
+  </button>
+  <button class="tab" data-tab="saved">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4h11a1 1 0 0 1 1 1v15.2l-6.5-4.4-6.5 4.4V5a1 1 0 0 1 1-1z"/></svg>
+    Salvati
+  </button>
+  <button class="tab" data-tab="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7.5h16M4 12h16M4 16.5h16"/><circle cx="9" cy="7.5" r="1.9" fill="var(--card)"/><circle cx="15" cy="12" r="1.9" fill="var(--card)"/><circle cx="7" cy="16.5" r="1.9" fill="var(--card)"/></svg>
+    Fonti
+  </button>
+</nav>
+
+<div id="modalRoot"><div class="scrim"></div><div class="sheet" id="sheet"></div></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+/* ============================== Storage ============================== */
+const store = {
+  get(k, fallback) {
+    try { const v = localStorage.getItem('bf_' + k); return v === null ? fallback : JSON.parse(v); }
+    catch { return fallback; }
+  },
+  set(k, v) { try { localStorage.setItem('bf_' + k, JSON.stringify(v)); } catch {} }
+};
+
+const PALETTE = ['#ff3b30','#ff9500','#34c759','#007aff','#5856d6','#af52de','#ff2d55','#00c7be','#ffcc00'];
+
+const state = {
+  sources: store.get('sources', []),
+  seen: new Set(store.get('seen', [])),
+  saved: store.get('saved', []),
+  manual: store.get('manual', []),
+  cache: store.get('cache', {}),          // { sourceId: {items:[], t:ms} }
+  settings: Object.assign({ poll: 10, notif: false, tags: '' }, store.get('settings', {})),
+  firstRun: store.get('firstRun', true),
+  filter: 'all',
+  search: '',
+  tab: 'feed',
+  errors: {},                              // { sourceId: message }
+  refreshing: false,
+};
+
+function persist() {
+  store.set('sources', state.sources);
+  store.set('seen', [...state.seen].slice(-3000));
+  store.set('saved', state.saved);
+  store.set('manual', state.manual);
+  store.set('cache', state.cache);
+  store.set('settings', state.settings);
+  store.set('firstRun', state.firstRun);
+}
+
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return 'h' + (h >>> 0).toString(36); };
+
+/* ============================== Fetch layer ============================== */
+async function fetchText(url) {
+  const attempts = [
+    url,
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+    'https://corsproxy.io/?url=' + encodeURIComponent(url),
+    'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
+  ];
+  let lastErr;
+  for (const u of attempts) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      const res = await fetch(u, { signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
+      const text = await res.text();
+      if (text && text.length > 10) return text;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('irraggiungibile');
+}
+
+function stripHtml(html) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  doc.querySelectorAll('script,style').forEach(n => n.remove());
+  return (doc.body.textContent || '').replace(/\s{3,}/g, '\n\n').trim();
+}
+
+function firstImg(html) {
+  const m = /<img[^>]+src=["']([^"']+)["']/i.exec(html || '');
+  return m && /^https?:/.test(m[1]) ? m[1] : '';
+}
+
+/* ---- Reddit ---- */
+async function fetchReddit(src) {
+  try { return await fetchRedditJson(src); }
+  catch {
+    // The JSON endpoint is often blocked for proxies; the Atom feed rarely is.
+    const xml = await fetchText(`https://www.reddit.com/r/${encodeURIComponent(src.value)}/new/.rss`);
+    return parseFeed(xml, src).map(it => ({ ...it, text: cleanRedditText(it.text) }));
+  }
+}
+
+function cleanRedditText(t) {
+  return (t || '')
+    .split(/submitted by/i)[0]
+    .replace(/\[link\]|\[comments\]/gi, '')
+    .replace(/\/?u\/[\w-]+/g, '')
+    .trim();
+}
+
+async function fetchRedditJson(src) {
+  const url = `https://www.reddit.com/r/${encodeURIComponent(src.value)}/new.json?limit=30&raw_json=1`;
+  const text = await fetchText(url);
+  const json = JSON.parse(text);
+  const children = json?.data?.children || [];
+  return children.map(c => {
+    const d = c.data;
+    let image = d.preview?.images?.[0]?.source?.url || '';
+    if (!image && /^https?:/.test(d.thumbnail || '') ) image = d.thumbnail;
+    if (!image && /\.(jpe?g|png|gif|webp)$/i.test(d.url || '')) image = d.url;
+    return {
+      id: 'rd_' + d.id,
+      sourceId: src.id,
+      title: d.title || '',
+      text: (d.selftext || '').trim(),
+      image,
+      link: 'https://www.reddit.com' + d.permalink,
+      date: (d.created_utc || 0) * 1000,
+    };
+  });
+}
+
+/* ---- RSS / Atom ---- */
+function parseFeed(xmlText, src) {
+  const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+  if (doc.querySelector('parsererror')) throw new Error('feed non valido');
+  const items = [...doc.querySelectorAll('item, entry')];
+  if (!items.length) throw new Error('feed vuoto');
+  return items.slice(0, 30).map(it => {
+    const pick = sel => it.querySelector(sel)?.textContent?.trim() || '';
+    let link = pick('link');
+    if (!link) link = it.querySelector('link')?.getAttribute('href') || '';
+    const rawDesc = pick('description') || pick('summary') ||
+      (it.getElementsByTagName('content:encoded')[0]?.textContent || '') || pick('content');
+    let image = '';
+    const media = it.getElementsByTagName('media:content')[0] || it.getElementsByTagName('media:thumbnail')[0];
+    if (media) image = media.getAttribute('url') || '';
+    if (!image) {
+      const enc = it.querySelector('enclosure');
+      if (enc && /image/.test(enc.getAttribute('type') || 'image')) image = enc.getAttribute('url') || '';
+    }
+    if (!image) image = firstImg(rawDesc);
+    const dateStr = pick('pubDate') || pick('published') || pick('updated') || pick('dc\\:date');
+    return {
+      id: 'rs_' + hash(link || pick('title')),
+      sourceId: src.id,
+      title: stripHtml(pick('title')),
+      text: stripHtml(rawDesc).slice(0, 1200),
+      image,
+      link,
+      date: dateStr ? (Date.parse(dateStr) || Date.now()) : Date.now(),
+    };
+  });
+}
+
+async function fetchRss(src) {
+  let url = src.value.trim();
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  const candidates = [url];
+  if (!/(feed|rss|atom|\.xml)/i.test(url)) {
+    candidates.push(url.replace(/\/$/, '') + '/feed/', url.replace(/\/$/, '') + '/rss');
+  }
+  let lastErr;
+  for (const u of candidates) {
+    try { return parseFeed(await fetchText(u), src); }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+/* ---- Refresh all ---- */
+async function refreshAll(silent) {
+  if (state.refreshing) return;
+  const fetchable = state.sources.filter(s => s.type === 'reddit' || s.type === 'rss');
+  if (!fetchable.length) { render(); return; }
+  state.refreshing = true;
+  document.getElementById('btnRefresh').classList.add('spinning');
+  state.errors = {};
+
+  const results = await Promise.allSettled(fetchable.map(src =>
+    (src.type === 'reddit' ? fetchReddit(src) : fetchRss(src))
+  ));
+
+  let fresh = [];
+  results.forEach((r, i) => {
+    const src = fetchable[i];
+    if (r.status === 'fulfilled') {
+      state.cache[src.id] = { items: r.value, t: Date.now() };
+      fresh = fresh.concat(r.value);
+    } else {
+      state.errors[src.id] = 'Impossibile aggiornare "' + src.name + '" — riprova più tardi.';
+      console.warn('fetch failed for source', src.id, r.reason);
+    }
+  });
+
+  // First successful run: mark everything as already seen (no fake "30 new")
+  if (state.firstRun && fresh.length) {
+    fresh.forEach(it => state.seen.add(it.id));
+    state.firstRun = false;
+  }
+
+  const newItems = fresh.filter(it => !state.seen.has(it.id));
+  state.refreshing = false;
+  document.getElementById('btnRefresh').classList.remove('spinning');
+  persist();
+  render();
+
+  if (newItems.length && !silent) toast(newItems.length + (newItems.length === 1 ? ' nuova notizia' : ' nuove notizie'));
+  if (newItems.length) notify(newItems);
+  updateBadges();
+}
+
+/* ============================== Notifications ============================== */
+function notify(items) {
+  if (!state.settings.notif || !('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const first = items[0];
+    new Notification(items.length === 1 ? 'Nuova notizia' : items.length + ' nuove notizie', {
+      body: first.title.slice(0, 120),
+      icon: 'icons/icon-192.png',
+      tag: 'brickfeed-news',
+    });
+  } catch {}
+}
+
+function unreadCount() {
+  return allItems().filter(it => !state.seen.has(it.id)).length;
+}
+
+function updateBadges() {
+  const n = unreadCount();
+  const pill = document.getElementById('unreadPill');
+  pill.textContent = n;
+  pill.classList.toggle('on', n > 0);
+  const badge = document.getElementById('feedBadge');
+  badge.textContent = n > 99 ? '99+' : n;
+  badge.classList.toggle('on', n > 0);
+  if ('setAppBadge' in navigator) {
+    (n > 0 ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+  }
+}
+
+/* ============================== Items ============================== */
+function allItems() {
+  let items = [...state.manual];
+  for (const src of state.sources) {
+    const c = state.cache[src.id];
+    if (c?.items) items = items.concat(c.items);
+  }
+  // drop items whose source no longer exists (manual items may have no source)
+  const ids = new Set(state.sources.map(s => s.id));
+  items = items.filter(it => !it.sourceId || ids.has(it.sourceId));
+  return items.sort((a, b) => b.date - a.date);
+}
+
+function visibleItems() {
+  let items = allItems();
+  if (state.filter !== 'all') items = items.filter(it => it.sourceId === state.filter);
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    items = items.filter(it => (it.title + ' ' + it.text).toLowerCase().includes(q));
+  }
+  return items;
+}
+
+/* ============================== Caption / copy ============================== */
+const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function scrubSources(text) {
+  const words = new Set();
+  for (const s of state.sources) {
+    words.add(s.name); words.add(s.value);
+    if (s.type === 'reddit') { words.add('r/' + s.value); words.add('/r/' + s.value); }
+    if (s.type === 'instagram') { words.add('@' + s.value.replace(/^@/, '')); words.add(s.value.replace(/^@/, '')); }
+    if (s.type === 'rss' || s.type === 'link') {
+      try { words.add(new URL(/^https?:/.test(s.value) ? s.value : 'https://' + s.value).hostname.replace(/^www\./, '')); } catch {}
+    }
+  }
+  let out = text;
+  // Longest first, so "nomelungo" is removed before a short name contained in it.
+  for (const w of [...words].filter(w => w && w.length >= 3).sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(escapeRegex(w), 'gi'), '');
+  }
+  return out
+    .replace(/[([]\s*(?:via|da|by|su|fonte|source|credit[si]?)?\s*[:@]?\s*[)\]]/gi, '')
+    .replace(/\b(?:via|fonte|source|credit[si]?)\s*[:@]?\s*$/gim, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ +([.,!?])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function buildCaption(item) {
+  let cap = item.title.trim();
+  if (item.text) cap += '\n\n' + item.text.trim();
+  cap = scrubSources(cap);
+  const tags = (state.settings.tags || '').trim();
+  if (tags) cap += '\n\n' + tags;
+  return cap;
+}
+
+async function copyText(text, msg) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch {}
+    ta.remove();
+  }
+  toast(msg || 'Copiato ✓');
+}
+
+/* ============================== Rendering ============================== */
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function relTime(ms) {
+  const diff = Date.now() - ms;
+  const m = Math.round(diff / 60000);
+  if (m < 1) return 'adesso';
+  if (m < 60) return m + ' min fa';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + ' h fa';
+  const d = Math.round(h / 24);
+  if (d < 7) return d + ' g fa';
+  return new Date(ms).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' });
+}
+
+const ICONS = {
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.6 1.6"/><path d="M14 10a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.6-1.6"/></svg>',
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 5H7a2.5 2.5 0 0 0-2.5 2.5V17A2.5 2.5 0 0 0 7 19.5h9.5A2.5 2.5 0 0 0 19 17v-6.5"/><path d="M14.5 3.5H20.5V9.5M20 4L11.5 12.5"/></svg>',
+  save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4h11a1 1 0 0 1 1 1v15.2l-6.5-4.4-6.5 4.4V5a1 1 0 0 1 1-1z"/></svg>',
+  saveFill: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4h11a1 1 0 0 1 1 1v15.2l-6.5-4.4-6.5 4.4V5a1 1 0 0 1 1-1z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5h15M9.5 6.5V4.8a1.3 1.3 0 0 1 1.3-1.3h2.4a1.3 1.3 0 0 1 1.3 1.3v1.7M6.5 6.5l.8 12.4a1.6 1.6 0 0 0 1.6 1.6h6.2a1.6 1.6 0 0 0 1.6-1.6l.8-12.4"/></svg>',
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="3.5"/><path d="M3.5 13.5H8l1.5 2.5h5l1.5-2.5h4.5"/></svg>',
+};
+
+function srcOf(id) { return state.sources.find(s => s.id === id); }
+
+function cardHTML(item, savedTab) {
+  const src = srcOf(item.sourceId);
+  const isNew = !state.seen.has(item.id) && !savedTab;
+  const isSaved = state.saved.some(s => s.id === item.id);
+  const isManual = item.id.startsWith('mn_');
+  const long = (item.text || '').length > 180 || (item.text || '').split('\n').length > 3;
+  return `<article class="card ${isNew ? 'new' : ''}" data-id="${esc(item.id)}">
+    ${item.image ? `<img class="hero" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+    <div class="body">
+      <div class="meta">
+        <span class="dot" style="background:${src ? src.color : 'var(--text3)'}"></span>
+        <span>${esc(src ? src.name : 'Nota mia')}</span>
+        ${isNew ? '<span class="newtag">NUOVO</span>' : ''}
+        <span class="time">${relTime(item.date)}</span>
+      </div>
+      <h2>${esc(item.title)}</h2>
+      ${item.text ? `<div class="txt">${esc(item.text)}</div>${long ? '<button class="more" data-act="more">Mostra tutto</button>' : ''}` : ''}
+      <div class="actions">
+        <button class="abtn" data-act="caption">${ICONS.copy}Caption</button>
+        ${item.link ? `<button class="abtn" data-act="link">${ICONS.link}Link</button>
+        <button class="abtn" data-act="open">${ICONS.open}Apri</button>` : ''}
+        <button class="abtn ${isSaved ? 'saved' : ''}" data-act="save">${isSaved ? ICONS.saveFill : ICONS.save}${isSaved ? 'Salvato' : 'Salva'}</button>
+        ${isManual || savedTab ? `<button class="abtn del" data-act="del">${ICONS.trash}Elimina</button>` : ''}
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderFeed() {
+  // chips
+  const chips = [`<button class="chip ${state.filter === 'all' ? 'active' : ''}" data-f="all">Tutte</button>`]
+    .concat(state.sources.filter(s => s.type === 'reddit' || s.type === 'rss').map(s =>
+      `<button class="chip ${state.filter === s.id ? 'active' : ''}" data-f="${s.id}"><span class="dot" style="background:${s.color}"></span>${esc(s.name)}</button>`));
+  $('#chips').innerHTML = chips.join('');
+
+  // quick access (social profiles & quick links)
+  $('#igRow').innerHTML = state.sources.filter(s => s.type === 'instagram' || s.type === 'link').map(s => {
+    const url = s.type === 'instagram'
+      ? 'https://www.instagram.com/' + s.value.replace(/^@/, '') + '/'
+      : (/^https?:\/\//i.test(s.value) ? s.value : 'https://' + s.value);
+    return `<button class="igItem" data-url="${esc(url)}">
+      <span class="ring" style="background:${s.color}">${esc(s.name.charAt(0).toUpperCase())}</span>
+      <span>${esc(s.name)}</span>
+    </button>`;
+  }).join('');
+
+  // errors
+  $('#srcErrors').innerHTML = Object.values(state.errors).map(e => `<div class="srcErr">${esc(e)}</div>`).join('');
+
+  const items = visibleItems();
+  $('#feedList').innerHTML = items.length
+    ? items.map(it => cardHTML(it, false)).join('')
+    : `<div class="empty">${ICONS.inbox}Nessuna notizia qui.<br>Tocca ↻ in alto per aggiornare.</div>`;
+}
+
+function renderSaved() {
+  $('#savedList').innerHTML = state.saved.length
+    ? [...state.saved].sort((a, b) => b.date - a.date).map(it => cardHTML(it, true)).join('')
+    : `<div class="empty">${ICONS.inbox}Le notizie che salvi per i tuoi post compaiono qui.</div>`;
+}
+
+const TYPE_LABEL = { reddit: 'Community', rss: 'Sito web', instagram: 'Profilo social', link: 'Link rapido' };
+
+function renderSettings() {
+  const rows = state.sources.map(s => `<div class="prow" data-src="${s.id}">
+      <span class="dot" style="background:${s.color}"></span>
+      <div class="grow"><b>${esc(s.name)}</b><small>${TYPE_LABEL[s.type] || s.type}</small></div>
+      <button class="txtbtn" data-act="edit">Modifica</button>
+      <button class="txtbtn red" data-act="remove">Rimuovi</button>
+    </div>`);
+  rows.push(`<div class="prow tappable" id="srcAdd"><div class="grow"><b class="txtbtn" style="color:var(--accent)">＋ Aggiungi fonte</b></div></div>`);
+  $('#srcPanel').innerHTML = rows.join('');
+  $('#setPoll').value = String(state.settings.poll);
+  $('#setTags').value = state.settings.tags || '';
+  $('#setNotif').checked = state.settings.notif && ('Notification' in window) && Notification.permission === 'granted';
+  $('#notifState').textContent = !('Notification' in window)
+    ? 'Non supportate su questo browser'
+    : Notification.permission === 'denied' ? 'Bloccate nelle impostazioni del browser' : '';
+}
+
+function render() {
+  const hasSources = state.sources.length > 0;
+  $('#topbar').hidden = !hasSources;
+  $('#tabbar').hidden = !hasSources;
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  if (!hasSources) {
+    $('#view-onboarding').classList.add('active');
+    $('#fab').classList.add('hidden');
+  } else {
+    $('#view-' + state.tab).classList.add('active');
+    $('#fab').classList.toggle('hidden', state.tab !== 'feed');
+    if (state.tab === 'feed') renderFeed();
+    if (state.tab === 'saved') renderSaved();
+    if (state.tab === 'settings') renderSettings();
+  }
+  updateBadges();
+}
+
+/* ============================== Toast ============================== */
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* ============================== Modals ============================== */
+function openSheet(html) {
+  $('#sheet').innerHTML = '<div class="grab"></div>' + html;
+  $('#modalRoot').classList.add('open');
+}
+function closeSheet() { $('#modalRoot').classList.remove('open'); }
+$('#modalRoot').querySelector('.scrim').addEventListener('click', closeSheet);
+
+function sheetAddSource(existing) {
+  const s = existing || { type: 'reddit', name: '', value: '' };
+  openSheet(`
+    <h2>${existing ? 'Modifica fonte' : 'Nuova fonte'}</h2>
+    <label>Tipo</label>
+    <div class="seg" id="segType" style="font-size:13px;">
+      <button data-t="reddit" class="${s.type === 'reddit' ? 'active' : ''}">Reddit</button>
+      <button data-t="rss" class="${s.type === 'rss' ? 'active' : ''}">Sito/RSS</button>
+      <button data-t="instagram" class="${s.type === 'instagram' ? 'active' : ''}">Instagram</button>
+      <button data-t="link" class="${s.type === 'link' ? 'active' : ''}">Link</button>
+    </div>
+    <label>Nome (come vuoi vederla nell'app)</label>
+    <input id="fName" value="${esc(s.name)}" placeholder="Es. Fonte 1" autocomplete="off">
+    <label id="fValLabel"></label>
+    <input id="fVal" value="${esc(s.value)}" autocomplete="off" autocapitalize="off">
+    <button class="bigbtn" id="fSave">${existing ? 'Salva modifiche' : 'Aggiungi'}</button>
+  `);
+  let type = s.type;
+  const VAL_HINT = {
+    reddit: ['Nome del subreddit (senza r/)', 'nomesubreddit'],
+    rss: ['Indirizzo del sito o del feed', 'https://…'],
+    instagram: ['Nome utente (senza @)', 'nomeutente'],
+    link: ['Indirizzo da aprire al tocco (es. canale Discord)', 'https://…'],
+  };
+  const applyHint = () => {
+    $('#fValLabel').textContent = VAL_HINT[type][0];
+    $('#fVal').placeholder = VAL_HINT[type][1];
+  };
+  applyHint();
+  $('#segType').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    type = b.dataset.t;
+    $('#segType').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    applyHint();
+  });
+  $('#fSave').addEventListener('click', () => {
+    const name = $('#fName').value.trim();
+    let value = $('#fVal').value.trim().replace(/^@/, '').replace(/^r\//, '');
+    if (!value) { toast('Compila i campi'); return; }
+    if (existing) {
+      existing.type = type; existing.name = name || value; existing.value = value;
+    } else {
+      state.sources.push({ id: uid(), type, name: name || value, value, color: PALETTE[state.sources.length % PALETTE.length] });
+    }
+    persist(); closeSheet(); render();
+    if (type !== 'instagram') refreshAll(true);
+  });
+}
+
+function sheetImport() {
+  openSheet(`
+    <h2>Importa configurazione</h2>
+    <label>Incolla qui il testo della configurazione</label>
+    <textarea id="impTxt" placeholder='[{"type":"reddit","name":"…","value":"…"}]'></textarea>
+    <button class="bigbtn" id="impGo">Importa</button>
+  `);
+  $('#impGo').addEventListener('click', () => {
+    try {
+      const arr = JSON.parse($('#impTxt').value);
+      if (!Array.isArray(arr)) throw 0;
+      let n = 0;
+      for (const raw of arr) {
+        if (!raw || !raw.type || !raw.value) continue;
+        if (!['reddit', 'rss', 'instagram', 'link'].includes(raw.type)) continue;
+        if (state.sources.some(s => s.type === raw.type && s.value.toLowerCase() === String(raw.value).toLowerCase())) continue;
+        state.sources.push({
+          id: uid(), type: raw.type,
+          name: String(raw.name || raw.value),
+          value: String(raw.value),
+          color: raw.color || PALETTE[state.sources.length % PALETTE.length],
+        });
+        n++;
+      }
+      persist(); closeSheet(); render();
+      toast(n ? n + ' fonti importate ✓' : 'Nessuna fonte nuova');
+      if (n) refreshAll(true);
+    } catch { toast('Formato non valido'); }
+  });
+}
+
+function sheetManual() {
+  const srcOpts = state.sources.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  openSheet(`
+    <h2>Aggiungi notizia</h2>
+    <label>Da dove arriva? (facoltativo)</label>
+    <select id="mSrc"><option value="">— Nessuna fonte —</option>${srcOpts}</select>
+    <label>Titolo</label>
+    <input id="mTitle" placeholder="Titolo della notizia">
+    <label>Testo</label>
+    <textarea id="mText" placeholder="Dettagli, descrizione…"></textarea>
+    <label>Link (facoltativo)</label>
+    <input id="mLink" placeholder="https://…" autocapitalize="off">
+    <label>Immagine — URL (facoltativo)</label>
+    <input id="mImg" placeholder="https://…" autocapitalize="off">
+    <button class="bigbtn" id="mSave">Aggiungi al feed</button>
+  `);
+  $('#mSave').addEventListener('click', () => {
+    const title = $('#mTitle').value.trim();
+    if (!title) { toast('Serve almeno un titolo'); return; }
+    const item = {
+      id: 'mn_' + uid(),
+      sourceId: $('#mSrc').value || '',
+      title,
+      text: $('#mText').value.trim(),
+      link: $('#mLink').value.trim(),
+      image: $('#mImg').value.trim(),
+      date: Date.now(),
+    };
+    state.manual.unshift(item);
+    state.seen.add(item.id);
+    persist(); closeSheet(); render();
+    toast('Notizia aggiunta ✓');
+  });
+}
+
+/* ============================== Events ============================== */
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  state.tab = t.dataset.tab;
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+  render();
+  window.scrollTo({ top: 0 });
+}));
+
+$('#btnRefresh').addEventListener('click', () => refreshAll(false));
+$('#btnMarkRead').addEventListener('click', () => {
+  allItems().forEach(it => state.seen.add(it.id));
+  persist(); render();
+  toast('Tutto letto ✓');
+});
+
+$('#search').addEventListener('input', e => { state.search = e.target.value.trim(); renderFeed(); });
+
+$('#chips').addEventListener('click', e => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  state.filter = b.dataset.f;
+  renderFeed();
+});
+
+$('#igRow').addEventListener('click', e => {
+  const b = e.target.closest('.igItem'); if (!b) return;
+  window.open(b.dataset.url, '_blank');
+});
+
+function handleCardAction(e, savedTab) {
+  const btn = e.target.closest('[data-act]'); if (!btn) return;
+  const card = btn.closest('.card'); if (!card) return;
+  const id = card.dataset.id;
+  const pool = savedTab ? state.saved : allItems();
+  const item = pool.find(it => it.id === id) || state.saved.find(it => it.id === id);
+  if (!item) return;
+  const act = btn.dataset.act;
+
+  if (act === 'more') {
+    const txt = card.querySelector('.txt');
+    const open = txt.classList.toggle('open');
+    btn.textContent = open ? 'Mostra meno' : 'Mostra tutto';
+  } else if (act === 'caption') {
+    copyText(buildCaption(item), 'Caption copiata ✓');
+    state.seen.add(item.id); persist(); updateBadges();
+    card.classList.remove('new'); card.querySelector('.newtag')?.remove();
+  } else if (act === 'link') {
+    copyText(item.link, 'Link copiato ✓');
+  } else if (act === 'open') {
+    state.seen.add(item.id); persist(); updateBadges();
+    card.classList.remove('new'); card.querySelector('.newtag')?.remove();
+    window.open(item.link, '_blank');
+  } else if (act === 'save') {
+    const i = state.saved.findIndex(s => s.id === item.id);
+    if (i >= 0) { state.saved.splice(i, 1); toast('Rimosso dai salvati'); }
+    else { state.saved.push(item); toast('Salvato ✓'); }
+    persist(); render();
+  } else if (act === 'del') {
+    if (savedTab) {
+      state.saved = state.saved.filter(s => s.id !== item.id);
+    } else {
+      state.manual = state.manual.filter(m => m.id !== item.id);
+      state.saved = state.saved.filter(s => s.id !== item.id);
+    }
+    persist(); render();
+    toast('Eliminato');
+  }
+}
+$('#feedList').addEventListener('click', e => handleCardAction(e, false));
+$('#savedList').addEventListener('click', e => handleCardAction(e, true));
+
+$('#fab').addEventListener('click', sheetManual);
+$('#obAdd').addEventListener('click', () => sheetAddSource(null));
+$('#obImport').addEventListener('click', sheetImport);
+$('#btnImport2').addEventListener('click', sheetImport);
+
+$('#srcPanel').addEventListener('click', e => {
+  if (e.target.closest('#srcAdd')) { sheetAddSource(null); return; }
+  const btn = e.target.closest('[data-act]'); if (!btn) return;
+  const row = btn.closest('.prow'); if (!row) return;
+  const src = srcOf(row.dataset.src); if (!src) return;
+  if (btn.dataset.act === 'edit') sheetAddSource(src);
+  if (btn.dataset.act === 'remove') {
+    if (!confirm('Rimuovere "' + src.name + '"? Le sue notizie spariranno dal feed.')) return;
+    state.sources = state.sources.filter(s => s.id !== src.id);
+    delete state.cache[src.id];
+    persist(); render();
+  }
+});
+
+$('#setPoll').addEventListener('change', e => {
+  state.settings.poll = parseInt(e.target.value, 10) || 10;
+  persist(); startPolling();
+});
+
+$('#setTags').addEventListener('change', e => {
+  state.settings.tags = e.target.value.trim();
+  persist(); toast('Hashtag salvati ✓');
+});
+
+$('#setNotif').addEventListener('change', async e => {
+  if (e.target.checked) {
+    if (!('Notification' in window)) { e.target.checked = false; toast('Non supportate qui'); return; }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { e.target.checked = false; state.settings.notif = false; }
+    else { state.settings.notif = true; toast('Notifiche attive ✓'); }
+  } else {
+    state.settings.notif = false;
+  }
+  persist(); renderSettings();
+});
+
+$('#btnExport').addEventListener('click', () => {
+  const cfg = state.sources.map(s => ({ type: s.type, name: s.name, value: s.value, color: s.color }));
+  copyText(JSON.stringify(cfg, null, 2), 'Configurazione copiata ✓');
+});
+
+$('#btnReset').addEventListener('click', () => {
+  if (!confirm('Azzerare tutto? Fonti, salvati e impostazioni andranno persi.')) return;
+  Object.keys(localStorage).filter(k => k.startsWith('bf_')).forEach(k => localStorage.removeItem(k));
+  location.reload();
+});
+
+/* ============================== Pull to refresh ============================== */
+(function () {
+  let startY = 0, pulling = false;
+  const ptr = $('#ptr');
+  window.addEventListener('touchstart', e => {
+    if (window.scrollY <= 0 && state.tab === 'feed' && !$('#modalRoot').classList.contains('open')) {
+      startY = e.touches[0].clientY; pulling = true;
+    }
+  }, { passive: true });
+  window.addEventListener('touchmove', e => {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 70) ptr.classList.add('show');
+    else ptr.classList.remove('show');
+  }, { passive: true });
+  window.addEventListener('touchend', () => {
+    if (!pulling) return;
+    pulling = false;
+    if (ptr.classList.contains('show')) {
+      ptr.classList.add('spin');
+      refreshAll(false).finally(() => {
+        ptr.classList.remove('show', 'spin');
+      });
+    }
+  });
+})();
+
+/* ============================== Polling ============================== */
+let pollTimer;
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => refreshAll(true), Math.max(5, state.settings.poll) * 60000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.sources.length) refreshAll(true);
+});
+
+/* ============================== Boot ============================== */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+render();
+if (state.sources.length) refreshAll(true);
+startPolling();
+</script>
+</body>
+</html>
