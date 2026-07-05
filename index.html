@@ -397,12 +397,13 @@
   <section class="view" id="view-onboarding">
     <svg class="appicon" viewBox="0 0 88 88"><rect width="88" height="88" rx="22" fill="#1d1d1f"/><circle cx="32" cy="32" r="9" fill="none" stroke="#f5f5f7" stroke-width="3.5"/><circle cx="56" cy="32" r="9" fill="none" stroke="#f5f5f7" stroke-width="3.5"/><circle cx="32" cy="56" r="9" fill="none" stroke="#f5f5f7" stroke-width="3.5"/><circle cx="56" cy="56" r="9" fill="#f5f5f7"/></svg>
     <h1>BrickFeed</h1>
-    <p>Le tue notizie, in un unico posto. Aggiungi le fonti che vuoi seguire: restano salvate solo su questo dispositivo.</p>
+    <p>Le tue notizie, in un unico posto. Aggiungi le fonti che vuoi seguire, o accedi per ritrovare le tue.</p>
     <button class="bigbtn" id="obAdd">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       Aggiungi una fonte
     </button>
     <button class="bigbtn secondary" id="obImport">Importa configurazione</button>
+    <button class="bigbtn secondary" id="obLogin" hidden>Ho già un account</button>
   </section>
 
   <!-- Feed -->
@@ -971,6 +972,7 @@ function render() {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   if (!hasSources) {
     $('#view-onboarding').classList.add('active');
+    $('#obLogin').hidden = !window.FIREBASE_CONFIG?.apiKey;
     $('#fab').classList.add('hidden');
   } else {
     $('#view-' + state.tab).classList.add('active');
@@ -1250,10 +1252,28 @@ async function doAuth(mode) {
   try {
     if (mode === 'signup') await SYNC.auth.createUserWithEmailAndPassword(email, pass);
     else await SYNC.auth.signInWithEmailAndPassword(email, pass);
+    if ($('#modalRoot').classList.contains('open')) closeSheet();
     toast('Accesso effettuato ✓');
   } catch (e) {
     toast(AUTH_ERRORS[e.code] || 'Errore: ' + (e.code || e.message));
   }
+}
+
+// Accesso dall'onboarding: su un dispositivo nuovo le impostazioni non sono
+// ancora raggiungibili, quindi il login deve poter partire da qui.
+function sheetLogin() {
+  openSheet(`
+    <h2>Accedi al tuo account</h2>
+    <p style="color:var(--text2); font-size:14.5px; line-height:1.5; margin-bottom:4px;">Le tue fonti e le tue notizie arriveranno da sole dal tuo account.</p>
+    <label>Email</label>
+    <input id="accEmail" type="email" placeholder="Email" autocomplete="email" autocapitalize="off">
+    <label>Password</label>
+    <input id="accPass" type="password" placeholder="Password" autocomplete="current-password">
+    <button class="bigbtn" id="shLogin">Accedi</button>
+    <button class="bigbtn secondary" id="shSignup" style="margin-top:2px;">Crea un account nuovo</button>
+  `);
+  $('#shLogin').addEventListener('click', () => doAuth('login'));
+  $('#shSignup').addEventListener('click', () => doAuth('signup'));
 }
 
 window.addEventListener('load', initSync);
@@ -1327,6 +1347,10 @@ $('#savedList').addEventListener('click', e => handleCardAction(e, true));
 $('#fab').addEventListener('click', sheetManual);
 $('#obAdd').addEventListener('click', () => sheetAddSource(null));
 $('#obImport').addEventListener('click', sheetImport);
+$('#obLogin').addEventListener('click', () => {
+  if (!SYNC.available) { toast('Connessione in corso, riprova tra un istante'); return; }
+  sheetLogin();
+});
 $('#btnImport2').addEventListener('click', sheetImport);
 
 $('#srcPanel').addEventListener('click', e => {
