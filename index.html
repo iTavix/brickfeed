@@ -564,12 +564,20 @@ function firstImg(html) {
   return m && /^https?:/.test(m[1]) ? m[1] : '';
 }
 
-/* ---- Reddit ---- */
+/* ---- Reddit (subreddit o utente "u/nome") ---- */
+function redditBase(value) {
+  const v = value.trim();
+  const m = /^\/?u(?:ser)?\//i.exec(v);
+  return m
+    ? 'https://www.reddit.com/user/' + encodeURIComponent(v.slice(m[0].length)) + '/submitted'
+    : 'https://www.reddit.com/r/' + encodeURIComponent(v) + '/new';
+}
+
 async function fetchReddit(src) {
   try { return await fetchRedditJson(src); }
   catch {
     // The JSON endpoint is often blocked for proxies; the Atom feed rarely is.
-    const xml = await fetchText(`https://www.reddit.com/r/${encodeURIComponent(src.value)}/new/.rss`);
+    const xml = await fetchText(redditBase(src.value) + '/.rss');
     return parseFeed(xml, src).map(it => ({ ...it, text: cleanRedditText(it.text) }));
   }
 }
@@ -583,8 +591,7 @@ function cleanRedditText(t) {
 }
 
 async function fetchRedditJson(src) {
-  const url = `https://www.reddit.com/r/${encodeURIComponent(src.value)}/new.json?limit=30&raw_json=1`;
-  const text = await fetchText(url);
+  const text = await fetchText(redditBase(src.value) + '.json?limit=30&raw_json=1');
   const json = JSON.parse(text);
   const children = json?.data?.children || [];
   return children.map(c => {
@@ -734,7 +741,15 @@ function allItems() {
   // drop items whose source no longer exists (manual items may have no source)
   const ids = new Set(state.sources.map(s => s.id));
   items = items.filter(it => !it.sourceId || ids.has(it.sourceId));
-  return items.sort((a, b) => b.date - a.date);
+  items.sort((a, b) => b.date - a.date);
+  // same post can arrive from two sources (e.g. a profile that posts in a community you follow)
+  const dupes = new Set();
+  return items.filter(it => {
+    const k = it.link || it.id;
+    if (dupes.has(k)) return false;
+    dupes.add(k);
+    return true;
+  });
 }
 
 function visibleItems() {
@@ -754,7 +769,7 @@ function scrubSources(text) {
   const words = new Set();
   for (const s of state.sources) {
     words.add(s.name); words.add(s.value);
-    if (s.type === 'reddit') { words.add('r/' + s.value); words.add('/r/' + s.value); }
+    if (s.type === 'reddit') { words.add('r/' + s.value); words.add('/r/' + s.value); words.add(s.value.replace(/^\/?u(?:ser)?\//i, '')); }
     if (s.type === 'instagram') { words.add('@' + s.value.replace(/^@/, '')); words.add(s.value.replace(/^@/, '')); }
     if (s.type === 'rss' || s.type === 'link') {
       try { words.add(new URL(/^https?:/.test(s.value) ? s.value : 'https://' + s.value).hostname.replace(/^www\./, '')); } catch {}
@@ -766,10 +781,12 @@ function scrubSources(text) {
     out = out.replace(new RegExp(escapeRegex(w), 'gi'), '');
   }
   return out
+    .replace(/[([]\s*(?:via|da|by|su|fonte|source|credit[si]?)\b[^)\]]*[)\]]/gi, '')
     .replace(/[([]\s*(?:via|da|by|su|fonte|source|credit[si]?)?\s*[:@]?\s*[)\]]/gi, '')
     .replace(/\b(?:via|fonte|source|credit[si]?)\s*[:@]?\s*$/gim, '')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/ +([.,!?])/g, '$1')
+    .replace(/[ \t]+$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -959,7 +976,7 @@ function sheetAddSource(existing) {
   `);
   let type = s.type;
   const VAL_HINT = {
-    reddit: ['Nome del subreddit (senza r/)', 'nomesubreddit'],
+    reddit: ['Subreddit (senza r/) oppure profilo come u/nomeutente', 'nomesubreddit'],
     rss: ['Indirizzo del sito o del feed', 'https://…'],
     instagram: ['Nome utente (senza @)', 'nomeutente'],
     link: ['Indirizzo da aprire al tocco (es. canale Discord)', 'https://…'],
