@@ -954,8 +954,27 @@ function openSheet(html) {
   $('#sheet').innerHTML = '<div class="grab"></div>' + html;
   $('#modalRoot').classList.add('open');
 }
-function closeSheet() { $('#modalRoot').classList.remove('open'); }
+let pendingConfirm = null;
+function closeSheet() {
+  $('#modalRoot').classList.remove('open');
+  if (pendingConfirm) { const r = pendingConfirm; pendingConfirm = null; r(false); }
+}
 $('#modalRoot').querySelector('.scrim').addEventListener('click', closeSheet);
+
+// Native confirm() is silently suppressed in some webviews/PWA contexts — use an in-app sheet.
+function confirmSheet(msg, label) {
+  return new Promise(resolve => {
+    pendingConfirm = resolve;
+    openSheet(`
+      <h2 style="margin-bottom:6px;">Sei sicuro?</h2>
+      <p style="color:var(--text2); font-size:15px; line-height:1.5;">${esc(msg)}</p>
+      <button class="bigbtn" id="cfYes" style="background:var(--danger);">${esc(label)}</button>
+      <button class="bigbtn secondary" id="cfNo" style="margin-top:2px;">Annulla</button>
+    `);
+    $('#cfYes').addEventListener('click', () => { pendingConfirm = null; closeSheet(); resolve(true); });
+    $('#cfNo').addEventListener('click', closeSheet);
+  });
+}
 
 function sheetAddSource(existing) {
   const s = existing || { type: 'reddit', name: '', value: '' };
@@ -1154,10 +1173,12 @@ $('#srcPanel').addEventListener('click', e => {
   const src = srcOf(row.dataset.src); if (!src) return;
   if (btn.dataset.act === 'edit') sheetAddSource(src);
   if (btn.dataset.act === 'remove') {
-    if (!confirm('Rimuovere "' + src.name + '"? Le sue notizie spariranno dal feed.')) return;
-    state.sources = state.sources.filter(s => s.id !== src.id);
-    delete state.cache[src.id];
-    persist(); render();
+    confirmSheet('Rimuovere "' + src.name + '"? Le sue notizie spariranno dal feed.', 'Rimuovi').then(ok => {
+      if (!ok) return;
+      state.sources = state.sources.filter(s => s.id !== src.id);
+      delete state.cache[src.id];
+      persist(); render();
+    });
   }
 });
 
@@ -1188,9 +1209,10 @@ $('#btnExport').addEventListener('click', () => {
   copyText(JSON.stringify(cfg, null, 2), 'Configurazione copiata ✓');
 });
 
-$('#btnReset').addEventListener('click', () => {
-  if (!confirm('Azzerare tutto? Fonti, salvati e impostazioni andranno persi.')) return;
+$('#btnReset').addEventListener('click', async () => {
+  if (!await confirmSheet('Fonti, notizie salvate e impostazioni andranno perse per sempre.', 'Azzera tutto')) return;
   Object.keys(localStorage).filter(k => k.startsWith('bf_')).forEach(k => localStorage.removeItem(k));
+  if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
   location.reload();
 });
 
