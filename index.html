@@ -589,8 +589,25 @@ async function fetchReddit(src) {
   catch {
     // The JSON endpoint is often blocked for proxies; the Atom feed rarely is.
     const xml = await fetchText(redditBase(src.value) + '/.rss');
-    return parseFeed(xml, src).map(it => ({ ...it, text: cleanRedditText(it.text) }));
+    return stripHtmlField(parseFeed(xml, src).map(it => ({
+      ...it,
+      // il feed contiene solo miniature: link diretto del post o id della miniatura → originale
+      image: redditFullImage(it.html) || upgradeRedditThumb(it.image) || it.image,
+      text: cleanRedditText(it.text),
+    })));
   }
+}
+
+function redditFullImage(html) {
+  const m = /href=["'](https?:\/\/(?:i\.redd\.it|i\.imgur\.com)\/[^"']+)["']/i.exec(html || '');
+  return m ? m[1].replace(/&amp;/g, '&') : '';
+}
+
+// La miniatura firmata preview.redd.it/<id>.jpg?width=140… ha lo stesso id
+// dell'originale non firmato su i.redd.it/<id>.jpg (vale anche per le gallerie).
+function upgradeRedditThumb(url) {
+  const m = /^https?:\/\/preview\.redd\.it\/([\w-]+\.(?:jpe?g|png|gif|webp))/i.exec(url || '');
+  return m ? 'https://i.redd.it/' + m[1] : '';
 }
 
 function cleanRedditText(t) {
@@ -651,14 +668,17 @@ function parseFeed(xmlText, src) {
       image,
       link,
       date: dateStr ? (Date.parse(dateStr) || Date.now()) : Date.now(),
+      html: rawDesc,          // usato dai fetcher per estrarre immagini migliori; non finisce in cache
     };
   });
 }
 
-// A source is fetchable if it has a feed to read (Instagram only via an
-// associated RSS URL: direct scraping is blocked server-side by Instagram).
+const stripHtmlField = items => items.map(({ html, ...it }) => it);
+
+// Tutte le fonti tranne i link rapidi hanno un feed leggibile
+// (Instagram tramite bridge pubblici o feed personalizzato).
 function isFetchable(s) {
-  return s.type === 'reddit' || s.type === 'rss' || (s.type === 'instagram' && s.feed);
+  return s.type === 'reddit' || s.type === 'rss' || s.type === 'instagram';
 }
 
 async function fetchRss(src, urlOverride) {
@@ -670,10 +690,58 @@ async function fetchRss(src, urlOverride) {
   }
   let lastErr;
   for (const u of candidates) {
-    try { return parseFeed(await fetchText(u), src); }
+    try { return stripHtmlField(parseFeed(await fetchText(u), src)); }
     catch (e) { lastErr = e; }
   }
   throw lastErr;
+}
+
+/* ---- Instagram (via bridge RSS pubblici; un eventuale feed personalizzato ha precedenza) ---- */
+const IG_BRIDGES = [
+  'https://rb.vern.cc/',
+  'https://rss-bridge.org/bridge01/',
+  'https://wtf.roflcopter.fr/rss-bridge/',
+  'https://feed.eugenemolotov.ru/',
+];
+
+function cleanInstagramText(t) {
+  return (t || '')
+    .replace(/follow\s+@?[\w.]+[^.!\n]*[.!]?/gi, '')      // "Follow @… for more …"
+    .replace(/(?:#[\w]+[ \t]*){2,}/g, '')                  // blocchi di hashtag della fonte
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+async function fetchInstagram(src) {
+  const handle = encodeURIComponent(src.value.replace(/^@/, ''));
+  const urls = [];
+  if (src.feed) urls.push(src.feed);
+  for (const b of IG_BRIDGES) {
+    urls.push(b + '?action=display&bridge=InstagramBridge&context=Username&u=' + handle + '&media_type=all&format=Atom');
+  }
+  let lastErr;
+  for (const u of urls) {
+    try {
+      const items = await fetchRss(src, u);
+      return items.map(it => ({ ...it, ...igTitleText(cleanInstagramText(it.title), cleanInstagramText(it.text)) }));
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('profilo non raggiungibile');
+}
+
+// Nei feed dei profili social il titolo è la caption troncata e il testo la caption
+// intera: senza questo controllo la caption copiata risulterebbe duplicata.
+function igTitleText(title, text) {
+  const probe = (title || '').replace(/(…|\.\.\.)\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (probe && (text || '').replace(/\s+/g, ' ').trim().startsWith(probe)) {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const first = lines[0] || title;
+    return {
+      title: first.length > 120 ? first.slice(0, 117) + '…' : first,
+      text: lines.slice(1).join('\n'),
+    };
+  }
+  return { title, text };
 }
 
 /* ---- Refresh all ---- */
@@ -687,7 +755,7 @@ async function refreshAll(silent) {
 
   const results = await Promise.allSettled(fetchable.map(src =>
     src.type === 'reddit' ? fetchReddit(src) :
-    src.type === 'instagram' ? fetchRss(src, src.feed) :
+    src.type === 'instagram' ? fetchInstagram(src) :
     fetchRss(src)
   ));
 
@@ -802,6 +870,9 @@ function scrubSources(text) {
   return out
     .replace(/[([]\s*(?:via|da|by|su|fonte|source|credit[si]?)\b[^)\]]*[)\]]/gi, '')
     .replace(/[([]\s*(?:via|da|by|su|fonte|source|credit[si]?)?\s*[:@]?\s*[)\]]/gi, '')
+    .replace(/\b(?:via|by|credit[si]?:?)\s+@[\w.]+/gi, '')
+    .replace(/\b(?:via|by|credit[si]?:?)\s+[\w-]+\.[a-z]{2,6}\b/gi, '')
+    .replace(/\b(?:[Vv]ia|[Bb]y|[Cc]redit[si]?:?)\s+[A-Z][\w.]*[\s.!]*(?=$|\n)/gm, '')
     .replace(/\b(?:via|fonte|source|credit[si]?)\s*[:@]?\s*$/gim, '')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/ +([.,!?])/g, '$1')
@@ -870,7 +941,7 @@ function cardHTML(item, savedTab) {
   const isManual = item.id.startsWith('mn_');
   const long = (item.text || '').length > 180 || (item.text || '').split('\n').length > 3;
   return `<article class="card ${isNew ? 'new' : ''}" data-id="${esc(item.id)}">
-    ${item.image ? `<img class="hero" src="${esc(item.image)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+    ${item.image ? `<img class="hero" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}else{this.remove();}">` : ''}
     <div class="body">
       <div class="meta">
         <span class="dot" style="background:${src ? src.color : 'var(--text3)'}"></span>
@@ -1039,7 +1110,7 @@ function sheetAddSource(existing) {
     <div id="feedWrap" hidden>
       <label>URL feed RSS (facoltativo)</label>
       <input id="fFeed" value="${esc(s.feed || '')}" placeholder="https://…" autocomplete="off" autocapitalize="off">
-      <div class="hint">I profili social non sono leggibili direttamente. Se generi un feed RSS del profilo con un servizio come rss.app e lo incolli qui, le sue notizie appariranno nel feed come per le altre fonti.</div>
+      <div class="hint">Le notizie del profilo vengono lette automaticamente tramite servizi ponte pubblici. Se un giorno smettessero di funzionare, incolla qui l'URL di un feed RSS del profilo (es. generato con rss.app): avrà la precedenza.</div>
     </div>
     <button class="bigbtn" id="fSave">${existing ? 'Salva modifiche' : 'Aggiungi'}</button>
   `);
