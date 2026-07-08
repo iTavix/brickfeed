@@ -239,6 +239,14 @@
     margin-bottom: 7px;
   }
   .card .meta .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .srcLink {
+    display:flex; align-items:center; gap:7px;
+    font-size: 12.5px; font-weight: 600; color: var(--text2);
+    padding: 2px 0; border-radius: 6px;
+    max-width: 60%; overflow:hidden;
+  }
+  .srcLink:active { opacity:.55; }
+  .srcLink svg { width:11px; height:11px; color: var(--text3); flex-shrink:0; }
   .card .meta .time { font-weight: 400; color: var(--text3); margin-left:auto; flex-shrink:0; }
   .card .meta .newtag {
     background: var(--accent); color:#fff;
@@ -1024,6 +1032,19 @@ const ICONS = {
 
 function srcOf(id) { return state.sources.find(s => s.id === id); }
 
+function sourceUrl(s) {
+  if (s.type === 'reddit') {
+    const m = /^\/?u(?:ser)?\//i.exec(s.value.trim());
+    return m ? 'https://www.reddit.com/user/' + s.value.trim().slice(m[0].length) + '/'
+             : 'https://www.reddit.com/r/' + s.value.trim() + '/';
+  }
+  if (s.type === 'instagram') return 'https://www.instagram.com/' + s.value.replace(/^@/, '') + '/';
+  let url = s.value.trim();
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  if (s.type === 'rss') { try { return new URL(url).origin; } catch {} }
+  return url;
+}
+
 function cardHTML(item, savedTab) {
   const src = srcOf(item.sourceId);
   const isNew = !state.seen.has(item.id) && !savedTab;
@@ -1034,8 +1055,9 @@ function cardHTML(item, savedTab) {
     ${item.image ? `<div class="heroWrap" data-act="zoom"><img class="hero" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}else{this.closest('.heroWrap').remove();}">${item.gallery || (item.images || []).length > 1 ? `<span class="galleryBadge">${ICONS.stack}${(item.images || []).length > 1 ? (item.images || []).length : ''}</span>` : ''}</div>` : ''}
     <div class="body">
       <div class="meta">
-        <span class="dot" style="background:${src ? src.color : 'var(--text3)'}"></span>
-        <span>${esc(src ? src.name : 'Nota mia')}</span>
+        ${src
+          ? `<button class="srcLink" data-act="source"><span class="dot" style="background:${src.color}"></span>${esc(src.name)}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></svg></button>`
+          : `<span class="dot" style="background:var(--text3)"></span><span>Nota mia</span>`}
         ${isNew ? '<span class="newtag">NUOVO</span>' : ''}
         <span class="time">${relTime(item.date)}</span>
       </div>
@@ -1053,17 +1075,11 @@ function cardHTML(item, savedTab) {
 }
 
 function renderFeed() {
-  // chips: filtri per le fonti con feed + apertura rapida per il resto (tutte icona-only)
+  // chips: ogni fonte è un filtro del feed (icona-only)
   const TYPE_ICON = { reddit: ICONS.alien, rss: ICONS.waves, instagram: ICONS.camera, link: ICONS.open };
   const chips = [`<button class="chip ${state.filter === 'all' ? 'active' : ''}" data-f="all">Tutte</button>`]
-    .concat(state.sources.filter(isFetchable).map(s =>
-      `<button class="chip ${state.filter === s.id ? 'active' : ''}" data-f="${s.id}" title="${esc(s.name)}"><span class="dot" style="background:${s.color}"></span>${TYPE_ICON[s.type]}</button>`))
-    .concat(state.sources.filter(s => !isFetchable(s) && (s.type === 'instagram' || s.type === 'link')).map(s => {
-      const url = s.type === 'instagram'
-        ? 'https://www.instagram.com/' + s.value.replace(/^@/, '') + '/'
-        : (/^https?:\/\//i.test(s.value) ? s.value : 'https://' + s.value);
-      return `<button class="chip quick" data-url="${esc(url)}" title="${esc(s.name)}"><span class="dot" style="background:${s.color}"></span>${TYPE_ICON[s.type]}</button>`;
-    }));
+    .concat(state.sources.map(s =>
+      `<button class="chip ${state.filter === s.id ? 'active' : ''}" data-f="${s.id}" title="${esc(s.name)}"><span class="dot" style="background:${s.color}"></span>${TYPE_ICON[s.type]}</button>`));
   $('#chips').innerHTML = chips.join('');
 
   // errors
@@ -1458,7 +1474,6 @@ $('#search').addEventListener('input', e => { state.search = e.target.value.trim
 
 $('#chips').addEventListener('click', e => {
   const b = e.target.closest('.chip'); if (!b) return;
-  if (b.dataset.url) { window.open(b.dataset.url, '_blank'); return; }
   state.filter = b.dataset.f;
   renderFeed();
 });
@@ -1475,6 +1490,9 @@ function handleCardAction(e, savedTab) {
   if (act === 'zoom') {
     openLightbox(item);
     card.classList.remove('new'); card.querySelector('.newtag')?.remove();
+  } else if (act === 'source') {
+    const src = srcOf(item.sourceId);
+    if (src) window.open(sourceUrl(src), '_blank');
   } else if (act === 'more') {
     const txt = card.querySelector('.txt');
     const open = txt.classList.toggle('open');
