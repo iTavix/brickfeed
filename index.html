@@ -186,7 +186,52 @@
   }
   @keyframes fadeUp { from { opacity:0; transform: translateY(6px);} to { opacity:1; transform:none;} }
   .card.new { box-shadow: 0 0 0 1.5px var(--accent), var(--shadow); }
-  .card img.hero { width:100%; max-height: 340px; object-fit: cover; background: var(--chip); }
+  .heroWrap { position: relative; cursor: pointer; }
+  .card img.hero { width:100%; max-height: 340px; object-fit: cover; background: var(--chip); display:block; }
+  .galleryBadge {
+    position: absolute; top: 10px; right: 10px;
+    display: flex; align-items: center; gap: 4px;
+    background: rgba(0,0,0,.55); color: #fff;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    font-size: 12px; font-weight: 600;
+    padding: 4px 8px; border-radius: 12px;
+    pointer-events: none;
+  }
+  .galleryBadge svg { width: 13px; height: 13px; }
+
+  /* ---------- Lightbox ---------- */
+  #lightbox { position: fixed; inset: 0; z-index: 300; background: #000; }
+  body.lb-open #topbar, body.lb-open #tabbar, body.lb-open #fab, body.lb-open #ptr { visibility: hidden; }
+  #lbTrack {
+    display: flex; height: 100%;
+    overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+  #lbTrack::-webkit-scrollbar { display: none; }
+  .lbSlide {
+    flex: 0 0 100%; height: 100%;
+    scroll-snap-align: center;
+    display: flex; align-items: center; justify-content: center;
+    padding: calc(env(safe-area-inset-top) + 56px) 0 calc(env(safe-area-inset-bottom) + 16px);
+  }
+  .lbSlide img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .lbBar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+    display: flex; align-items: center; gap: 6px;
+    padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
+    background: linear-gradient(rgba(0,0,0,.55), transparent);
+  }
+  #lbCount { flex: 1; text-align: center; color: #fff; font-size: 14px; font-weight: 600; }
+  .lbBtn {
+    width: 42px; height: 42px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; background: rgba(255,255,255,.14);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+  .lbBtn:active { background: rgba(255,255,255,.28); }
+  .lbBtn svg { width: 19px; height: 19px; }
+  .lbSpin svg { width: 32px; height: 32px; color: #fff; animation: spin 1s linear infinite; }
   .card .body { padding: 14px 16px 8px; }
   .card .meta {
     display:flex; align-items:center; gap:7px;
@@ -496,6 +541,20 @@
 </nav>
 
 <div id="modalRoot"><div class="scrim"></div><div class="sheet" id="sheet"></div></div>
+
+<div id="lightbox" hidden>
+  <div class="lbBar">
+    <button class="lbBtn" id="lbClose" title="Chiudi">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <span id="lbCount"></span>
+    <button class="lbBtn" id="lbDownload" title="Scarica immagine">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 11l4.5 4.5L16.5 11M5 19.5h14"/></svg>
+    </button>
+  </div>
+  <div id="lbTrack"></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -593,9 +652,32 @@ async function fetchReddit(src) {
       ...it,
       // il feed contiene solo miniature: link diretto del post o id della miniatura → originale
       image: redditFullImage(it.html) || upgradeRedditThumb(it.image) || it.image,
+      // le gallerie si caricano al tocco sulla copertina (vedi itemImages)
+      images: undefined,
+      gallery: (/reddit\.com\/gallery\/(\w+)/i.exec(it.html || '') || [])[1],
       text: cleanRedditText(it.text),
     })));
   }
+}
+
+/* ---- Galleria completa di un post (caricata al primo tocco sulla copertina) ---- */
+async function itemImages(item) {
+  if (item.images && item.images.length) return item.images;
+  if (item.gallery) {
+    try {
+      const html = await fetchText('https://www.reddit.com/gallery/' + item.gallery);
+      const names = [...new Set([...html.matchAll(/(?:preview|i)\.redd\.it\/([\w-]+\.(?:jpe?g|png|webp|gif))/gi)].map(m => m[1]))];
+      // i nomi con slug "…-v0-<id>.jpg" e il file originale "<id>.jpg" hanno lo stesso id
+      const ids = [...new Set(names.map(n => { const m = /-v0-([a-z0-9]+\.\w+)$/i.exec(n); return m ? m[1] : n; }))];
+      const imgs = ids.map(id => 'https://i.redd.it/' + id);
+      if (imgs.length) {
+        item.images = imgs;      // gli item in cache sono riferimenti: la modifica persiste
+        persistLocal();
+        return imgs;
+      }
+    } catch (e) { console.warn('gallery fetch', e); }
+  }
+  return item.image ? [item.image] : [];
 }
 
 function redditFullImage(html) {
@@ -659,6 +741,11 @@ function parseFeed(xmlText, src) {
       if (enc && /image/.test(enc.getAttribute('type') || 'image')) image = enc.getAttribute('url') || '';
     }
     if (!image) image = firstImg(rawDesc);
+    // tutte le immagini del post (es. caroselli): la prima fa da copertina
+    const images = [...new Set([...rawDesc.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)]
+      .map(m => m[1].replace(/&amp;/g, '&'))
+      .filter(u => /^https?:/.test(u)))].slice(0, 20);
+    if (!image && images.length) image = images[0];
     const dateStr = pick('pubDate') || pick('published') || pick('updated') || pick('dc\\:date');
     return {
       id: 'rs_' + hash(link || pick('title')),
@@ -666,6 +753,7 @@ function parseFeed(xmlText, src) {
       title: stripHtml(pick('title')),
       text: stripHtml(rawDesc).slice(0, 1200),
       image,
+      images: images.length > 1 ? images : undefined,
       link,
       date: dateStr ? (Date.parse(dateStr) || Date.now()) : Date.now(),
       html: rawDesc,          // usato dai fetcher per estrarre immagini migliori; non finisce in cache
@@ -928,6 +1016,8 @@ const ICONS = {
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5h15M9.5 6.5V4.8a1.3 1.3 0 0 1 1.3-1.3h2.4a1.3 1.3 0 0 1 1.3 1.3v1.7M6.5 6.5l.8 12.4a1.6 1.6 0 0 0 1.6 1.6h6.2a1.6 1.6 0 0 0 1.6-1.6l.8-12.4"/></svg>',
   inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="3.5"/><path d="M3.5 13.5H8l1.5 2.5h5l1.5-2.5h4.5"/></svg>',
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="4.5"/><circle cx="12" cy="12" r="3.6"/><circle cx="16.7" cy="7.3" r="0.5" fill="currentColor" stroke="none"/></svg>',
+  stack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="13" height="13" rx="2.5"/><path d="M4 15V6.5A2.5 2.5 0 0 1 6.5 4H15"/></svg>',
+  spinner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.5-5.8"/></svg>',
   alien: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13.5" r="6.5"/><path d="M12 7l2.6-3.1"/><circle cx="15" cy="3.4" r="0.6" fill="currentColor" stroke="none"/><circle cx="9.6" cy="13" r="0.8" fill="currentColor" stroke="none"/><circle cx="14.4" cy="13" r="0.8" fill="currentColor" stroke="none"/></svg>',
   waves: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 11.5a7.5 7.5 0 0 1 7.5 7.5M5 5.5A13.5 13.5 0 0 1 18.5 19"/><circle cx="6.2" cy="17.8" r="1.3" fill="currentColor" stroke="none"/></svg>',
 };
@@ -941,7 +1031,7 @@ function cardHTML(item, savedTab) {
   const isManual = item.id.startsWith('mn_');
   const long = (item.text || '').length > 180 || (item.text || '').split('\n').length > 3;
   return `<article class="card ${isNew ? 'new' : ''}" data-id="${esc(item.id)}">
-    ${item.image ? `<img class="hero" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}else{this.remove();}">` : ''}
+    ${item.image ? `<div class="heroWrap" data-act="zoom"><img class="hero" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}else{this.closest('.heroWrap').remove();}">${item.gallery || (item.images || []).length > 1 ? `<span class="galleryBadge">${ICONS.stack}${(item.images || []).length > 1 ? (item.images || []).length : ''}</span>` : ''}</div>` : ''}
     <div class="body">
       <div class="meta">
         <span class="dot" style="background:${src ? src.color : 'var(--text3)'}"></span>
@@ -1382,7 +1472,10 @@ function handleCardAction(e, savedTab) {
   if (!item) return;
   const act = btn.dataset.act;
 
-  if (act === 'more') {
+  if (act === 'zoom') {
+    openLightbox(item);
+    card.classList.remove('new'); card.querySelector('.newtag')?.remove();
+  } else if (act === 'more') {
     const txt = card.querySelector('.txt');
     const open = txt.classList.toggle('open');
     btn.textContent = open ? 'Mostra meno' : 'Mostra tutto';
@@ -1483,6 +1576,79 @@ $('#btnReset').addEventListener('click', async () => {
   Object.keys(localStorage).filter(k => k.startsWith('bf_')).forEach(k => localStorage.removeItem(k));
   if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
   location.reload();
+});
+
+/* ============================== Lightbox ============================== */
+let lbImages = [];
+
+function lbIndex() {
+  const t = $('#lbTrack');
+  return Math.max(0, Math.min(lbImages.length - 1, Math.round(t.scrollLeft / t.clientWidth)));
+}
+
+function updateLbCount() {
+  $('#lbCount').textContent = lbImages.length ? (lbIndex() + 1) + ' / ' + lbImages.length : '';
+}
+
+async function openLightbox(item) {
+  state.seen.add(item.id); persist(); updateBadges();
+  lbImages = [];
+  const lb = $('#lightbox');
+  lb.hidden = false;
+  document.body.classList.add('lb-open');
+  document.body.style.overflow = 'hidden';
+  $('#lbCount').textContent = '';
+  $('#lbTrack').innerHTML = `<div class="lbSlide"><div class="lbSpin">${ICONS.spinner}</div></div>`;
+  const imgs = await itemImages(item);
+  if (lb.hidden) return;                        // chiuso durante il caricamento
+  lbImages = imgs;
+  if (!imgs.length) {
+    $('#lbTrack').innerHTML = '<div class="lbSlide" style="color:#98989e; font-size:15px;">Nessuna immagine disponibile</div>';
+    return;
+  }
+  $('#lbTrack').innerHTML = imgs.map(u =>
+    `<div class="lbSlide"><img src="${esc(u)}" alt="" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}"></div>`
+  ).join('');
+  $('#lbTrack').scrollLeft = 0;
+  updateLbCount();
+}
+
+function closeLightbox() {
+  $('#lightbox').hidden = true;
+  document.body.classList.remove('lb-open');
+  document.body.style.overflow = '';
+  lbImages = [];
+  render();                                      // aggiorna badge galleria e stato "nuovo"
+}
+
+async function downloadImage(url, name) {
+  toast('Scarico…');
+  try {
+    const res = await fetch('https://images.weserv.nl/?url=' + encodeURIComponent(url));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Immagine scaricata ✓');
+  } catch {
+    // fallback: apri l'immagine, da lì si salva con tocco prolungato / clic destro
+    window.open(url, '_blank');
+  }
+}
+
+$('#lbClose').addEventListener('click', closeLightbox);
+$('#lbTrack').addEventListener('scroll', () => requestAnimationFrame(updateLbCount), { passive: true });
+$('#lbDownload').addEventListener('click', () => {
+  if (!lbImages.length) return;
+  const i = lbIndex();
+  const ext = (/\.(jpe?g|png|gif|webp)/i.exec(lbImages[i]) || [,'jpg'])[1].replace('jpeg', 'jpg');
+  downloadImage(lbImages[i], 'brickfeed-' + (i + 1) + '.' + ext);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#lightbox').hidden) closeLightbox();
 });
 
 /* ============================== Pull to refresh ============================== */
