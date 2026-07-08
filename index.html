@@ -1478,6 +1478,28 @@ $('#chips').addEventListener('click', e => {
   renderFeed();
 });
 
+// Su desktop la riga dei filtri deve scorrere anche con rotellina e trascinamento col mouse.
+(function () {
+  const el = $('#chips');
+  el.addEventListener('wheel', e => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollWidth > el.clientWidth) {
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+  }, { passive: false });
+  let down = false, dragged = false, startX = 0, startLeft = 0;
+  el.addEventListener('mousedown', e => { down = true; dragged = false; startX = e.clientX; startLeft = el.scrollLeft; });
+  window.addEventListener('mousemove', e => {
+    if (!down) return;
+    const dx = e.clientX - startX;
+    if (Math.abs(dx) > 5) dragged = true;
+    if (dragged) el.scrollLeft = startLeft - dx;
+  });
+  window.addEventListener('mouseup', () => { down = false; });
+  // un drag che finisce sopra una chip non deve attivare il filtro
+  el.addEventListener('click', e => { if (dragged) { e.preventDefault(); e.stopPropagation(); } }, true);
+})();
+
 function handleCardAction(e, savedTab) {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
   const card = btn.closest('.card'); if (!card) return;
