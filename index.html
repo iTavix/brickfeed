@@ -671,6 +671,16 @@ async function fetchReddit(src) {
 /* ---- Galleria completa di un post (caricata al primo tocco sulla copertina) ---- */
 async function itemImages(item) {
   if (item.images && item.images.length) return item.images;
+  if (item.pixwox) {
+    try {
+      const html = await fetchText(item.pixwox);
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const imgs = [...new Set([...doc.querySelectorAll('img')]
+        .map(im => im.getAttribute('data-src') || im.getAttribute('src') || '')
+        .filter(u => /picnob\.com\/p\//i.test(u)))].slice(0, 20);
+      if (imgs.length) { item.images = imgs; persistLocal(); return imgs; }
+    } catch (e) { console.warn('mirror gallery', e); }
+  }
   if (item.gallery) {
     try {
       const html = await fetchText('https://www.reddit.com/gallery/' + item.gallery);
@@ -820,9 +830,57 @@ async function fetchInstagram(src) {
     try {
       const items = await fetchRss(src, u);
       return items.map(it => ({ ...it, ...igTitleText(cleanInstagramText(it.title), cleanInstagramText(it.text)) }));
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      lastErr = e;
+      // feed valido ma senza post = il profilo non è nella cache dei bridge:
+      // gli altri daranno lo stesso esito, meglio passare subito al mirror
+      if (/feed vuoto/.test(e.message)) break;
+    }
   }
+  // secondo livello: mirror pubblico del profilo
+  try { return await fetchIgMirror(src); }
+  catch (e) { lastErr = e; }
   throw lastErr || new Error('profilo non raggiungibile');
+}
+
+/* ---- Fallback: mirror pubblico del profilo (pixwox/picnob) ---- */
+function parseAgo(s, fallback) {
+  const m = /(\d+)\s*(minute|hour|day|week|month|year)/i.exec(s || '');
+  if (!m) return fallback;
+  const mult = { minute: 6e4, hour: 36e5, day: 864e5, week: 6048e5, month: 2592e6, year: 31536e6 }[m[2].toLowerCase()];
+  return Date.now() - (+m[1]) * mult;
+}
+
+function splitCaption(cap) {
+  const m = /^(.{5,110}?[.!?])(\s|$)/.exec(cap);
+  const title = m ? m[1] : (cap.length > 110 ? cap.slice(0, 107) + '…' : cap);
+  return { title, text: cap.slice(title.length).replace(/^…/, '').trim() };
+}
+
+async function fetchIgMirror(src) {
+  const handle = src.value.replace(/^@/, '');
+  const html = await fetchText('https://www.pixwox.com/profile/' + encodeURIComponent(handle) + '/');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const items = [...doc.querySelectorAll('.items .item')];
+  if (!items.length) throw new Error('profilo non raggiungibile');
+  // conserva le date già assegnate: quelle del mirror sono relative ("1 day ago")
+  const prevById = new Map((state.cache[src.id]?.items || []).map(p => [p.id, p]));
+  return items.slice(0, 20).map((el, i) => {
+    const img = el.querySelector('img');
+    const cap = cleanInstagramText(img?.getAttribute('alt') || '');
+    const postPath = el.querySelector('a.cover_link')?.getAttribute('href') || '';
+    const id = 'igm_' + hash(postPath || cap);
+    const postUrl = postPath ? 'https://www.pixwox.com' + postPath : 'https://www.instagram.com/' + handle + '/';
+    return {
+      id,
+      sourceId: src.id,
+      ...splitCaption(cap),
+      image: img?.getAttribute('data-src') || img?.getAttribute('src') || '',
+      pixwox: postUrl,
+      link: postUrl,
+      date: prevById.get(id)?.date || parseAgo(el.querySelector('.time')?.textContent, Date.now() - i * 36e5),
+    };
+  });
 }
 
 // Nei feed dei profili social il titolo è la caption troncata e il testo la caption
@@ -1052,7 +1110,7 @@ function cardHTML(item, savedTab) {
   const isManual = item.id.startsWith('mn_');
   const long = (item.text || '').length > 180 || (item.text || '').split('\n').length > 3;
   return `<article class="card ${isNew ? 'new' : ''}" data-id="${esc(item.id)}">
-    ${item.image ? `<div class="heroWrap" data-act="zoom"><img class="hero" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}else{this.closest('.heroWrap').remove();}">${item.gallery || (item.images || []).length > 1 ? `<span class="galleryBadge">${ICONS.stack}${(item.images || []).length > 1 ? (item.images || []).length : ''}</span>` : ''}</div>` : ''}
+    ${item.image ? `<div class="heroWrap" data-act="zoom"><img class="hero" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(!this.dataset.p){this.dataset.p=1;this.src='https://images.weserv.nl/?url='+encodeURIComponent(this.src);}else{this.closest('.heroWrap').remove();}">${item.gallery || item.pixwox || (item.images || []).length > 1 ? `<span class="galleryBadge">${ICONS.stack}${(item.images || []).length > 1 ? (item.images || []).length : ''}</span>` : ''}</div>` : ''}
     <div class="body">
       <div class="meta">
         ${src
