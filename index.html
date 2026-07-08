@@ -820,11 +820,23 @@ function cleanInstagramText(t) {
 
 async function fetchInstagram(src) {
   const handle = encodeURIComponent(src.value.replace(/^@/, ''));
-  const urls = [];
-  if (src.feed) urls.push(src.feed);
+  const bridgeUrls = [];
+  if (src.feed) bridgeUrls.push(src.feed);
   for (const b of IG_BRIDGES) {
-    urls.push(b + '?action=display&bridge=InstagramBridge&context=Username&u=' + handle + '&media_type=all&format=Atom');
+    bridgeUrls.push(b + '?action=display&bridge=InstagramBridge&context=Username&u=' + handle + '&media_type=all&format=Atom');
   }
+  // Ponti e mirror si aggiornano in momenti diversi: interroghiamo entrambi in
+  // parallelo e uniamo, così le ultime notizie compaiono da qualunque parte arrivino.
+  const [bridge, mirror] = await Promise.all([
+    fetchIgFromBridges(src, bridgeUrls).catch(() => []),
+    fetchIgMirror(src).catch(() => []),
+  ]);
+  const merged = mergeIgItems(bridge, mirror);
+  if (!merged.length) throw new Error('profilo non raggiungibile');
+  return merged;
+}
+
+async function fetchIgFromBridges(src, urls) {
   let lastErr;
   for (const u of urls) {
     try {
@@ -832,15 +844,33 @@ async function fetchInstagram(src) {
       return items.map(it => ({ ...it, ...igTitleText(cleanInstagramText(it.title), cleanInstagramText(it.text)) }));
     } catch (e) {
       lastErr = e;
-      // feed valido ma senza post = il profilo non è nella cache dei bridge:
-      // gli altri daranno lo stesso esito, meglio passare subito al mirror
+      // feed valido ma senza post = profilo non in cache di quel ponte: gli altri
+      // daranno lo stesso esito, inutile insistere
       if (/feed vuoto/.test(e.message)) break;
     }
   }
-  // secondo livello: mirror pubblico del profilo
-  try { return await fetchIgMirror(src); }
-  catch (e) { lastErr = e; }
-  throw lastErr || new Error('profilo non raggiungibile');
+  throw lastErr || new Error('nessun ponte disponibile');
+}
+
+// Chiave di contenuto: identifica lo stesso post a prescindere dalla sorgente
+// (ponte o mirror), così l'id resta stabile e non ci sono doppioni o falsi "nuovi".
+const igKey = it => (it.title + ' ' + (it.text || '')).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+
+function mergeIgItems(bridge, mirror) {
+  const out = [];
+  const seen = new Set();
+  const push = it => {
+    const key = igKey(it);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const newId = 'ig_' + hash(it.sourceId + '|' + key);
+    if (state.seen.has(it.id)) state.seen.add(newId);   // eredita lo stato "letto" dai vecchi id
+    out.push({ ...it, id: newId });
+  };
+  // il ponte è più ricco (carosello già incluso + data precisa): ha la precedenza sui duplicati
+  bridge.forEach(push);
+  mirror.forEach(push);
+  return out;
 }
 
 /* ---- Fallback: mirror pubblico del profilo (pixwox/picnob) ---- */
@@ -863,22 +893,19 @@ async function fetchIgMirror(src) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const items = [...doc.querySelectorAll('.items .item')];
   if (!items.length) throw new Error('profilo non raggiungibile');
-  // conserva le date già assegnate: quelle del mirror sono relative ("1 day ago")
-  const prevById = new Map((state.cache[src.id]?.items || []).map(p => [p.id, p]));
   return items.slice(0, 20).map((el, i) => {
     const img = el.querySelector('img');
     const cap = cleanInstagramText(img?.getAttribute('alt') || '');
     const postPath = el.querySelector('a.cover_link')?.getAttribute('href') || '';
-    const id = 'igm_' + hash(postPath || cap);
     const postUrl = postPath ? 'https://www.pixwox.com' + postPath : 'https://www.instagram.com/' + handle + '/';
     return {
-      id,
+      id: 'igm_' + hash(postPath || cap),   // sovrascritto in mergeIgItems con l'id di contenuto
       sourceId: src.id,
       ...splitCaption(cap),
       image: img?.getAttribute('data-src') || img?.getAttribute('src') || '',
       pixwox: postUrl,
       link: postUrl,
-      date: prevById.get(id)?.date || parseAgo(el.querySelector('.time')?.textContent, Date.now() - i * 36e5),
+      date: parseAgo(el.querySelector('.time')?.textContent, Date.now() - i * 36e5),
     };
   });
 }
