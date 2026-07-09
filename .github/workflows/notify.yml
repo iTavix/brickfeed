@@ -2,7 +2,9 @@ name: Notifiche push
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # ogni 5 minuti (il minimo consentito; i cron di Actions partono comunque
+    # con qualche minuto di ritardo nelle ore di punta)
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       test:
