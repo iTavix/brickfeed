@@ -617,27 +617,35 @@ const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(3
 const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return 'h' + (h >>> 0).toString(36); };
 
 /* ============================== Fetch layer ============================== */
+const TRANSPORTS = [
+  u => u,                                                              // diretta
+  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+];
+let goodTransport = 1;   // il transport che ha funzionato per ultimo passa in testa
+
 async function fetchText(url) {
-  const attempts = [
-    url,
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-    'https://corsproxy.io/?url=' + encodeURIComponent(url),
-    'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
-  ];
+  const order = [goodTransport, 0, 1, 2, 3].filter((v, i, a) => a.indexOf(v) === i);
   let lastErr;
-  for (const u of attempts) {
+  for (const idx of order) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 12000);
-      const res = await fetch(u, { signal: ctrl.signal });
+      const t = setTimeout(() => ctrl.abort(), 9000);
+      const res = await fetch(TRANSPORTS[idx](url), { signal: ctrl.signal });
       clearTimeout(t);
       if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
       const text = await res.text();
-      if (text && text.length > 10) return text;
+      if (text && text.length > 10) { goodTransport = idx; return text; }
+      lastErr = new Error('risposta vuota');
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('irraggiungibile');
 }
+
+// Anti-cache a scadenza 15 minuti: evita che proxy o CDN servano copie vecchie.
+// NON usarlo sui ponti RSS-Bridge: rifiutano i parametri sconosciuti.
+const bust = u => u + (u.includes('?') ? '&' : '?') + 'bfcb=' + Math.floor(Date.now() / 9e5);
 
 function stripHtml(html) {
   const doc = new DOMParser().parseFromString(html || '', 'text/html');
@@ -663,7 +671,7 @@ async function fetchReddit(src) {
   try { return await fetchRedditJson(src); }
   catch {
     // The JSON endpoint is often blocked for proxies; the Atom feed rarely is.
-    const xml = await fetchText(redditBase(src.value) + '/.rss');
+    const xml = await fetchText(bust(redditBase(src.value) + '/.rss'));
     return stripHtmlField(parseFeed(xml, src).map(it => ({
       ...it,
       // il feed contiene solo miniature: link diretto del post o id della miniatura → originale
@@ -681,7 +689,7 @@ async function itemImages(item) {
   if (item.images && item.images.length) return item.images;
   if (item.pixwox) {
     try {
-      const html = await fetchText(item.pixwox);
+      const html = await fetchText(bust(item.pixwox));
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const imgs = [...new Set([...doc.querySelectorAll('img')]
         .map(im => im.getAttribute('data-src') || im.getAttribute('src') || '')
@@ -691,7 +699,7 @@ async function itemImages(item) {
   }
   if (item.gallery) {
     try {
-      const html = await fetchText('https://www.reddit.com/gallery/' + item.gallery);
+      const html = await fetchText(bust('https://www.reddit.com/gallery/' + item.gallery));
       const names = [...new Set([...html.matchAll(/(?:preview|i)\.redd\.it\/([\w-]+\.(?:jpe?g|png|webp|gif))/gi)].map(m => m[1]))];
       // i nomi con slug "…-v0-<id>.jpg" e il file originale "<id>.jpg" hanno lo stesso id
       const ids = [...new Set(names.map(n => { const m = /-v0-([a-z0-9]+\.\w+)$/i.exec(n); return m ? m[1] : n; }))];
@@ -727,7 +735,7 @@ function cleanRedditText(t) {
 }
 
 async function fetchRedditJson(src) {
-  const text = await fetchText(redditBase(src.value) + '.json?limit=30&raw_json=1');
+  const text = await fetchText(bust(redditBase(src.value) + '.json?limit=30&raw_json=1'));
   const json = JSON.parse(text);
   const children = json?.data?.children || [];
   return children.map(c => {
@@ -803,8 +811,10 @@ async function fetchRss(src, urlOverride) {
     candidates.push(url.replace(/\/$/, '') + '/feed/', url.replace(/\/$/, '') + '/rss');
   }
   let lastErr;
+  // anti-cache solo sugli URL nostri: i ponti e i feed personalizzati passano intatti
+  const wrap = urlOverride ? (u => u) : bust;
   for (const u of candidates) {
-    try { return stripHtmlField(parseFeed(await fetchText(u), src)); }
+    try { return stripHtmlField(parseFeed(await fetchText(wrap(u)), src)); }
     catch (e) { lastErr = e; }
   }
   throw lastErr;
@@ -897,7 +907,7 @@ function splitCaption(cap) {
 
 async function fetchIgMirror(src) {
   const handle = src.value.replace(/^@/, '');
-  const html = await fetchText('https://www.pixwox.com/profile/' + encodeURIComponent(handle) + '/');
+  const html = await fetchText(bust('https://www.pixwox.com/profile/' + encodeURIComponent(handle) + '/'));
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const items = [...doc.querySelectorAll('.items .item')];
   if (!items.length) throw new Error('profilo non raggiungibile');
