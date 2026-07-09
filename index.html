@@ -845,10 +845,15 @@ async function fetchInstagram(src) {
   }
   // Ponti e mirror si aggiornano in momenti diversi: interroghiamo entrambi in
   // parallelo e uniamo, così le ultime notizie compaiono da qualunque parte arrivino.
-  const [bridge, mirror] = await Promise.all([
+  let [bridge, mirror] = await Promise.all([
     fetchIgFromBridges(src, bridgeUrls).catch(() => []),
     fetchIgMirror(src).catch(() => []),
   ]);
+  // profili solo-mirror + intoppo transitorio del proxy = un retry con pausa salva la fonte
+  if (!bridge.length && !mirror.length) {
+    await new Promise(r => setTimeout(r, 2500));
+    mirror = await fetchIgMirror(src).catch(() => []);
+  }
   const merged = mergeIgItems(bridge, mirror);
   if (!merged.length) throw new Error('profilo non raggiungibile');
   return merged;
@@ -905,17 +910,27 @@ function splitCaption(cap) {
   return { title, text: cap.slice(title.length).replace(/^…/, '').trim() };
 }
 
+// Front-end intercambiabili dello stesso mirror: se uno è bloccato, l'altro regge.
+const IG_MIRRORS = ['https://www.pixwox.com', 'https://www.picnob.com', 'https://www.piokok.com'];
+
 async function fetchIgMirror(src) {
   const handle = src.value.replace(/^@/, '');
-  const html = await fetchText(bust('https://www.pixwox.com/profile/' + encodeURIComponent(handle) + '/'));
-  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let doc, host, lastErr;
+  for (const h of IG_MIRRORS) {
+    try {
+      const html = await fetchText(bust(h + '/profile/' + encodeURIComponent(handle) + '/'));
+      const d = new DOMParser().parseFromString(html, 'text/html');
+      if (d.querySelectorAll('.items .item').length) { doc = d; host = h; break; }
+      lastErr = new Error('mirror senza post');
+    } catch (e) { lastErr = e; }
+  }
+  if (!doc) throw lastErr || new Error('profilo non raggiungibile');
   const items = [...doc.querySelectorAll('.items .item')];
-  if (!items.length) throw new Error('profilo non raggiungibile');
   return items.slice(0, 20).map((el, i) => {
     const img = el.querySelector('img');
     const cap = cleanInstagramText(img?.getAttribute('alt') || '');
     const postPath = el.querySelector('a.cover_link')?.getAttribute('href') || '';
-    const postUrl = postPath ? 'https://www.pixwox.com' + postPath : 'https://www.instagram.com/' + handle + '/';
+    const postUrl = postPath ? host + postPath : 'https://www.instagram.com/' + handle + '/';
     return {
       id: 'igm_' + hash(postPath || cap),   // sovrascritto in mergeIgItems con l'id di contenuto
       sourceId: src.id,
