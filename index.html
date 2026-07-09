@@ -231,6 +231,10 @@
   }
   .lbBtn:active { background: rgba(255,255,255,.28); }
   .lbBtn svg { width: 19px; height: 19px; }
+  .lbBtn.wide {
+    width: auto; padding: 0 13px; gap: 6px; border-radius: 21px;
+    font-size: 14px; font-weight: 700; color: #fff;
+  }
   .lbSpin svg { width: 32px; height: 32px; color: #fff; animation: spin 1s linear infinite; }
   .card .body { padding: 14px 16px 8px; }
   .card .meta {
@@ -556,8 +560,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
     <span id="lbCount"></span>
-    <button class="lbBtn" id="lbDownloadAll" title="Scarica tutte le immagini" hidden>
+    <button class="lbBtn wide" id="lbDownloadAll" title="Scarica tutte le immagini" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9M8 8.5l4 4 4-4"/><path d="M4 14.5v3A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-3"/><path d="M8 16.5h8"/></svg>
+      <span id="lbAllCount"></span>
     </button>
     <button class="lbBtn" id="lbDownload" title="Scarica immagine">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 11l4.5 4.5L16.5 11M5 19.5h14"/></svg>
@@ -1796,6 +1801,7 @@ function lbIndex() {
 function updateLbCount() {
   $('#lbCount').textContent = lbImages.length ? (lbIndex() + 1) + ' / ' + lbImages.length : '';
   $('#lbDownloadAll').hidden = lbImages.length < 2;
+  $('#lbAllCount').textContent = 'tutte (' + lbImages.length + ')';
 }
 
 async function openLightbox(item) {
@@ -1901,40 +1907,54 @@ function saveBlob(blob, name) {
 }
 
 const imgExt = url => (/\.(jpe?g|png|gif|webp)/i.exec(url) || [, 'jpg'])[1].replace(/jpeg/i, 'jpg').toLowerCase();
+const imgMime = url => ({ jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' }[imgExt(url)] || 'image/jpeg');
 
-async function downloadAllImages() {
-  if (!lbImages.length) return;
-  toast('Scarico ' + lbImages.length + ' immagini…');
-  const results = await Promise.allSettled(lbImages.map(fetchImageBytes));
-  const files = [];
-  results.forEach((r, i) => {
-    if (r.status === 'fulfilled') files.push({ name: String(files.length + 1).padStart(2, '0') + '.' + imgExt(lbImages[i]), data: r.value });
-  });
-  if (!files.length) { toast('Download non riuscito'); return; }
-  if (files.length === 1) {
-    saveBlob(new Blob([files[0].data]), 'brickfeed-' + files[0].name);
-    toast('Immagine scaricata ✓');
-  } else {
-    saveBlob(buildZip(files), 'brickfeed-' + files.length + '-immagini.zip');
-    toast(files.length + ' immagini in un file ZIP ✓' + (files.length < lbImages.length ? ' (' + (lbImages.length - files.length) + ' non raggiungibili)' : ''));
-  }
+// Su mobile il download classico non esiste: il foglio di condivisione nativo
+// ("Salva immagine") porta le foto direttamente in Foto/Galleria.
+async function shareFiles(files) {
+  if (!navigator.canShare || !navigator.canShare({ files })) return 'unsupported';
+  try { await navigator.share({ files }); return 'shared'; }
+  catch (e) { return e.name === 'AbortError' ? 'aborted' : 'unsupported'; }
 }
 
 async function downloadImage(url, name) {
-  toast('Scarico…');
+  toast('Preparo l\'immagine…');
   try {
-    const res = await fetch('https://images.weserv.nl/?url=' + encodeURIComponent(url));
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    const data = await fetchImageBytes(url);
+    const file = new File([data], name, { type: imgMime(url) });
+    const shared = await shareFiles([file]);
+    if (shared === 'shared') { toast('Scegli "Salva immagine" per metterla in Foto'); return; }
+    if (shared === 'aborted') return;
+    saveBlob(new Blob([data], { type: imgMime(url) }), name);
     toast('Immagine scaricata ✓');
   } catch {
-    // fallback: apri l'immagine, da lì si salva con tocco prolungato / clic destro
     window.open(url, '_blank');
+    toast('Immagine aperta: tienila premuta per salvarla');
+  }
+}
+
+async function downloadAllImages() {
+  if (!lbImages.length) return;
+  toast('Preparo ' + lbImages.length + ' immagini…');
+  const results = await Promise.allSettled(lbImages.map(fetchImageBytes));
+  const ok = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') ok.push({ url: lbImages[i], data: r.value });
+  });
+  if (!ok.length) { toast('Download non riuscito'); return; }
+  const missing = lbImages.length - ok.length;
+  // mobile: condivisione nativa → "Salva N immagini" → tutte in Foto
+  const files = ok.map((f, i) => new File([f.data], 'brickfeed-' + String(i + 1).padStart(2, '0') + '.' + imgExt(f.url), { type: imgMime(f.url) }));
+  const shared = await shareFiles(files);
+  if (shared === 'shared') { toast('Scegli "Salva ' + (files.length > 1 ? 'immagini' : 'immagine') + '" per metterle in Foto'); return; }
+  if (shared === 'aborted') return;
+  // desktop: un unico file ZIP
+  if (files.length === 1) {
+    saveBlob(files[0], files[0].name);
+    toast('Immagine scaricata ✓');
+  } else {
+    saveBlob(buildZip(ok.map((f, i) => ({ name: String(i + 1).padStart(2, '0') + '.' + imgExt(f.url), data: f.data }))), 'brickfeed-' + ok.length + '-immagini.zip');
+    toast(ok.length + ' immagini in un file ZIP ✓' + (missing ? ' (' + missing + ' non raggiungibili)' : ''));
   }
 }
 
