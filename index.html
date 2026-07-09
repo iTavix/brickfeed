@@ -1226,8 +1226,25 @@ function renderSettings() {
   $('#notifState').textContent = !('Notification' in window)
     ? 'Non supportate su questo browser'
     : Notification.permission === 'denied' ? 'Bloccate nelle impostazioni del browser'
-    : notifOn ? (SYNC.user ? 'Attive anche ad app chiusa su questo dispositivo' : 'Attive con app aperta — accedi per riceverle sempre')
+    : notifOn ? (SYNC.user ? 'Verifica iscrizione push…' : 'Attive con app aperta — accedi per riceverle sempre')
     : '';
+  // verifica onesta: iscrizione push reale di QUESTO dispositivo (non l'intenzione)
+  if (notifOn && SYNC.user && ('serviceWorker' in navigator)) {
+    (async () => {
+      let msg;
+      try {
+        if (!('PushManager' in window)) throw new Error('push non supportato qui — apri l\'app installata sulla schermata Home');
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) { await enablePush(); sub = await reg.pushManager.getSubscription(); }
+        msg = sub ? 'Push attivo anche ad app chiusa ✓' : ('Iscrizione push non riuscita' + (SYNC.pushError ? ': ' + SYNC.pushError : ''));
+      } catch (e) {
+        msg = 'Iscrizione push non riuscita: ' + e.message;
+      }
+      const el = $('#notifState');
+      if (el && state.tab === 'settings') el.textContent = msg;
+    })();
+  }
 }
 
 function render() {
@@ -1516,7 +1533,11 @@ function urlB64ToUint8(s) {
 }
 
 async function enablePush() {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !SYNC.user) return false;
+  if (!SYNC.user) { SYNC.pushError = 'account non attivo'; return false; }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    SYNC.pushError = 'push non supportato qui (su iPhone/iPad: apri l\'app installata sulla schermata Home)';
+    return false;
+  }
   try {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.subscribe({
@@ -1524,8 +1545,15 @@ async function enablePush() {
       applicationServerKey: urlB64ToUint8(VAPID_PUBLIC),
     });
     await syncDocRef().set({ pushSubs: { [SYNC.deviceId]: JSON.parse(JSON.stringify(sub)) } }, { merge: true });
+    SYNC.pushError = '';
+    SYNC.pushOk = true;
     return true;
-  } catch (e) { console.warn('push subscribe', e); return false; }
+  } catch (e) {
+    SYNC.pushError = (e.name ? e.name + ': ' : '') + e.message;
+    SYNC.pushOk = false;
+    console.warn('push subscribe', e);
+    return false;
+  }
 }
 
 async function disablePush() {
