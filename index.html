@@ -556,6 +556,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
     <span id="lbCount"></span>
+    <button class="lbBtn" id="lbDownloadAll" title="Scarica tutte le immagini" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9M8 8.5l4 4 4-4"/><path d="M4 14.5v3A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5v-3"/><path d="M8 16.5h8"/></svg>
+    </button>
     <button class="lbBtn" id="lbDownload" title="Scarica immagine">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 11l4.5 4.5L16.5 11M5 19.5h14"/></svg>
     </button>
@@ -1614,6 +1617,7 @@ window.addEventListener('load', initSync);
 /* ============================== Events ============================== */
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   state.tab = t.dataset.tab;
+  if (t.dataset.tab === 'feed') state.filter = 'all';   // il tab Feed riporta sempre a "Tutte"
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
   render();
   window.scrollTo({ top: 0 });
@@ -1791,6 +1795,7 @@ function lbIndex() {
 
 function updateLbCount() {
   $('#lbCount').textContent = lbImages.length ? (lbIndex() + 1) + ' / ' + lbImages.length : '';
+  $('#lbDownloadAll').hidden = lbImages.length < 2;
 }
 
 async function openLightbox(item) {
@@ -1824,6 +1829,97 @@ function closeLightbox() {
   render();                                      // aggiorna badge galleria e stato "nuovo"
 }
 
+/* ---- ZIP senza compressione, costruito in-app: un file con tutte le immagini ---- */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);
+    lh.setUint16(6, 0x0800, true);       // nomi UTF-8
+    lh.setUint16(8, 0, true);            // store, nessuna compressione
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, f.data.length, true);
+    lh.setUint32(22, f.data.length, true);
+    lh.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(lh.buffer), name, f.data);
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true);
+    cd.setUint16(4, 20, true); cd.setUint16(6, 20, true);
+    cd.setUint16(8, 0x0800, true);
+    cd.setUint32(16, crc, true);
+    cd.setUint32(20, f.data.length, true);
+    cd.setUint32(24, f.data.length, true);
+    cd.setUint16(28, name.length, true);
+    cd.setUint32(42, offset, true);
+    central.push(new Uint8Array(cd.buffer), name);
+    offset += 30 + name.length + f.data.length;
+  }
+  let cdLen = 0;
+  central.forEach(p => { cdLen += p.length; });
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, files.length, true);
+  eocd.setUint16(10, files.length, true);
+  eocd.setUint32(12, cdLen, true);
+  eocd.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(eocd.buffer)], { type: 'application/zip' });
+}
+
+async function fetchImageBytes(url) {
+  const res = await fetch('https://images.weserv.nl/?url=' + encodeURIComponent(url));
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+const imgExt = url => (/\.(jpe?g|png|gif|webp)/i.exec(url) || [, 'jpg'])[1].replace(/jpeg/i, 'jpg').toLowerCase();
+
+async function downloadAllImages() {
+  if (!lbImages.length) return;
+  toast('Scarico ' + lbImages.length + ' immagini…');
+  const results = await Promise.allSettled(lbImages.map(fetchImageBytes));
+  const files = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') files.push({ name: String(files.length + 1).padStart(2, '0') + '.' + imgExt(lbImages[i]), data: r.value });
+  });
+  if (!files.length) { toast('Download non riuscito'); return; }
+  if (files.length === 1) {
+    saveBlob(new Blob([files[0].data]), 'brickfeed-' + files[0].name);
+    toast('Immagine scaricata ✓');
+  } else {
+    saveBlob(buildZip(files), 'brickfeed-' + files.length + '-immagini.zip');
+    toast(files.length + ' immagini in un file ZIP ✓' + (files.length < lbImages.length ? ' (' + (lbImages.length - files.length) + ' non raggiungibili)' : ''));
+  }
+}
+
 async function downloadImage(url, name) {
   toast('Scarico…');
   try {
@@ -1847,9 +1943,9 @@ $('#lbTrack').addEventListener('scroll', () => requestAnimationFrame(updateLbCou
 $('#lbDownload').addEventListener('click', () => {
   if (!lbImages.length) return;
   const i = lbIndex();
-  const ext = (/\.(jpe?g|png|gif|webp)/i.exec(lbImages[i]) || [,'jpg'])[1].replace('jpeg', 'jpg');
-  downloadImage(lbImages[i], 'brickfeed-' + (i + 1) + '.' + ext);
+  downloadImage(lbImages[i], 'brickfeed-' + (i + 1) + '.' + imgExt(lbImages[i]));
 });
+$('#lbDownloadAll').addEventListener('click', downloadAllImages);
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('#lightbox').hidden) closeLightbox();
 });
