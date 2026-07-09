@@ -500,7 +500,7 @@
           <label class="switch"><input type="checkbox" id="setNotif"><span class="knob"></span></label>
         </div>
       </div>
-      <div class="hint">Le notifiche funzionano mentre l'app è aperta (su iPhone: aggiungi l'app alla schermata Home). Il pallino rosso segnala sempre le novità.</div>
+      <div class="hint">Con l'account attivo le notifiche arrivano anche ad app chiusa (su iPhone serve l'app sulla schermata Home, iOS 16.4+). Il pallino rosso segnala sempre le novità.</div>
     </div>
     <div class="group">
       <h3>Caption Instagram</h3>
@@ -1221,10 +1221,13 @@ function renderSettings() {
   }
   $('#setPoll').value = String(state.settings.poll);
   $('#setTags').value = state.settings.tags || '';
-  $('#setNotif').checked = state.settings.notif && ('Notification' in window) && Notification.permission === 'granted';
+  const notifOn = state.settings.notif && ('Notification' in window) && Notification.permission === 'granted';
+  $('#setNotif').checked = notifOn;
   $('#notifState').textContent = !('Notification' in window)
     ? 'Non supportate su questo browser'
-    : Notification.permission === 'denied' ? 'Bloccate nelle impostazioni del browser' : '';
+    : Notification.permission === 'denied' ? 'Bloccate nelle impostazioni del browser'
+    : notifOn ? (SYNC.user ? 'Attive anche ad app chiusa su questo dispositivo' : 'Attive con app aperta — accedi per riceverle sempre')
+    : '';
 }
 
 function render() {
@@ -1428,7 +1431,13 @@ function initSync() {
     SYNC.auth.onAuthStateChanged(u => {
       SYNC.user = u;
       SYNC.error = '';
-      if (u) startSyncListener(); else stopSyncListener();
+      if (u) {
+        startSyncListener();
+        // notifiche già consentite su questo dispositivo → iscrivi subito al push
+        if (state.settings.notif && ('Notification' in window) && Notification.permission === 'granted') enablePush();
+      } else {
+        stopSyncListener();
+      }
       if (state.tab === 'settings') renderSettings();
     });
   } catch (e) { console.warn('firebase init', e); }
@@ -1477,6 +1486,7 @@ function scheduleSync() {
 
 function pushSync() {
   if (!SYNC.user) return;
+  // merge:true — nel documento vivono anche campi scritti da altri (pushSubs, notified)
   syncDocRef().set({
     deviceId: SYNC.deviceId,
     sources: state.sources,
@@ -1485,7 +1495,7 @@ function pushSync() {
     seen: [...state.seen].slice(-3000),
     settings: { poll: state.settings.poll, tags: state.settings.tags || '' },  // notifiche restano per-dispositivo
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-  }).then(() => {
+  }, { merge: true }).then(() => {
     if (SYNC.error) { SYNC.error = ''; if (state.tab === 'settings') renderSettings(); }
   }).catch(e => {
     SYNC.error = e.code === 'permission-denied'
@@ -1494,6 +1504,39 @@ function pushSync() {
     console.warn('sync push', e);
     if (state.tab === 'settings') renderSettings();
   });
+}
+
+/* ---- Notifiche push (anche ad app chiusa, via postino esterno) ---- */
+const VAPID_PUBLIC = 'BKodQ5y7xAtsmjFySGu-mDiMrKJVK4uVhDpNAsbgTy5zUaSUglRrPJo3Vjm6FtJp7H0Y85lYsVF6bZVgWYkVnMU';
+
+function urlB64ToUint8(s) {
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !SYNC.user) return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8(VAPID_PUBLIC),
+    });
+    await syncDocRef().set({ pushSubs: { [SYNC.deviceId]: JSON.parse(JSON.stringify(sub)) } }, { merge: true });
+    return true;
+  } catch (e) { console.warn('push subscribe', e); return false; }
+}
+
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+    if (SYNC.user) {
+      await syncDocRef().update({ ['pushSubs.' + SYNC.deviceId]: firebase.firestore.FieldValue.delete() }).catch(() => {});
+    }
+  } catch (_) {}
 }
 
 const AUTH_ERRORS = {
@@ -1672,10 +1715,17 @@ $('#setNotif').addEventListener('change', async e => {
   if (e.target.checked) {
     if (!('Notification' in window)) { e.target.checked = false; toast('Non supportate qui'); return; }
     const perm = await Notification.requestPermission();
-    if (perm !== 'granted') { e.target.checked = false; state.settings.notif = false; }
-    else { state.settings.notif = true; toast('Notifiche attive ✓'); }
+    if (perm !== 'granted') {
+      e.target.checked = false; state.settings.notif = false;
+    } else {
+      state.settings.notif = true;
+      // con un account attivo, iscrivi il dispositivo al push (arriva anche ad app chiusa)
+      const pushed = SYNC.user ? await enablePush() : false;
+      toast(pushed ? 'Notifiche attive, anche ad app chiusa ✓' : 'Notifiche attive con app aperta ✓');
+    }
   } else {
     state.settings.notif = false;
+    disablePush();
   }
   persist(); renderSettings();
 });

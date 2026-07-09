@@ -1,4 +1,4 @@
-const CACHE = 'brickfeed-v1';
+const CACHE = 'brickfeed-v2';
 const SHELL = [
   './',
   './index.html',
@@ -19,6 +19,27 @@ self.addEventListener('activate', e => {
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Notifiche push: arrivano dal "postino" esterno anche ad app chiusa.
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) {}
+  e.waitUntil(self.registration.showNotification(d.title || 'BrickFeed', {
+    body: d.body || 'Ci sono novità nel tuo feed.',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: 'brickfeed-push',
+    data: { url: d.url || './' },
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    for (const c of list) { if ('focus' in c) return c.focus(); }
+    return clients.openWindow(e.notification.data?.url || './');
+  }));
 });
 
 self.addEventListener('fetch', e => {
