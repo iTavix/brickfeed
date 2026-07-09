@@ -1258,9 +1258,9 @@ function renderSettings() {
       let msg;
       try {
         if (!('PushManager' in window)) throw new Error('push non supportato qui — apri l\'app installata sulla schermata Home');
+        await ensurePushSynced();
         const reg = await navigator.serviceWorker.ready;
-        let sub = await reg.pushManager.getSubscription();
-        if (!sub) { await enablePush(); sub = await reg.pushManager.getSubscription(); }
+        const sub = await reg.pushManager.getSubscription();
         msg = sub ? 'Push attivo anche ad app chiusa ✓' : ('Iscrizione push non riuscita' + (SYNC.pushError ? ': ' + SYNC.pushError : ''));
       } catch (e) {
         msg = 'Iscrizione push non riuscita: ' + e.message;
@@ -1474,8 +1474,7 @@ function initSync() {
       SYNC.error = '';
       if (u) {
         startSyncListener();
-        // notifiche già consentite su questo dispositivo → iscrivi subito al push
-        if (state.settings.notif && ('Notification' in window) && Notification.permission === 'granted') enablePush();
+        ensurePushSynced();   // riallinea l'iscrizione push di questo dispositivo
       } else {
         stopSyncListener();
       }
@@ -1556,6 +1555,15 @@ function urlB64ToUint8(s) {
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
+let syncedEndpoint = null;   // ultimo endpoint push scritto su Firestore per questo dispositivo
+
+async function saveSub(sub) {
+  await syncDocRef().set({
+    pushSubs: { [SYNC.deviceId]: Object.assign(JSON.parse(JSON.stringify(sub)), { t: Date.now() }) },
+  }, { merge: true });
+  syncedEndpoint = sub.endpoint;
+}
+
 async function enablePush() {
   if (!SYNC.user) { SYNC.pushError = 'account non attivo'; return false; }
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -1568,7 +1576,7 @@ async function enablePush() {
       userVisibleOnly: true,
       applicationServerKey: urlB64ToUint8(VAPID_PUBLIC),
     });
-    await syncDocRef().set({ pushSubs: { [SYNC.deviceId]: JSON.parse(JSON.stringify(sub)) } }, { merge: true });
+    await saveSub(sub);
     SYNC.pushError = '';
     SYNC.pushOk = true;
     return true;
@@ -1578,6 +1586,21 @@ async function enablePush() {
     console.warn('push subscribe', e);
     return false;
   }
+}
+
+// Autoguarigione: a ogni apertura riscrive su Firestore l'iscrizione CORRENTE.
+// I browser (iOS in testa) rigenerano l'endpoint: senza questo, il vecchio resta
+// in Firestore, il postino gli manda a vuoto e il dispositivo sparisce.
+async function ensurePushSynced() {
+  if (!SYNC.user || !state.settings.notif) return;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) { await enablePush(); return; }
+    if (sub.endpoint !== syncedEndpoint) await saveSub(sub);   // endpoint cambiato → risalva
+  } catch (_) {}
 }
 
 async function disablePush() {
@@ -2020,12 +2043,18 @@ function startPolling() {
   pollTimer = setInterval(() => refreshAll(true), Math.max(5, state.settings.poll) * 60000);
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && state.sources.length) refreshAll(true);
+  if (!document.hidden && state.sources.length) { refreshAll(true); ensurePushSynced(); }
 });
 
 /* ============================== Boot ============================== */
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
+  // messaggi dal service worker: nuova notizia arrivata / iscrizione da risalvare
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type === 'bf-refresh') { if (state.sources.length) refreshAll(false); }
+    else if (e.data?.type === 'bf-resubscribe') { syncedEndpoint = null; ensurePushSynced(); }
+  });
+  navigator.serviceWorker.ready.then(() => ensurePushSynced());
 }
 render();
 if (state.sources.length) refreshAll(true);

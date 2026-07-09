@@ -116,6 +116,15 @@ for (const doc of snap.docs) {
   const d = doc.data() || {};
   const sources = Array.isArray(d.sources) ? d.sources : [];
   const subs = d.pushSubs && typeof d.pushSubs === 'object' ? d.pushSubs : {};
+  // pota le iscrizioni orfane (dispositivi che non riaprono l'app da oltre 60 giorni):
+  // restano "valide" al servizio push ma non appartengono più a nessuno → falsi invii
+  const STALE = 60 * 864e5;
+  for (const [id, s] of Object.entries(subs)) {
+    if (s && s.t && Date.now() - s.t > STALE) {
+      delete subs[id];
+      await doc.ref.update({ ['pushSubs.' + id]: admin.firestore.FieldValue.delete() }).catch(() => {});
+    }
+  }
   const subEntries = Object.entries(subs).filter(([, s]) => s && s.endpoint);
   if (!sources.length || !subEntries.length) { console.log(doc.id, '— salto (niente fonti o iscrizioni)'); continue; }
 
