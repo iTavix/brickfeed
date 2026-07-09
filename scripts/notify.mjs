@@ -92,12 +92,18 @@ async function fetchRssSource(value) {
   throw lastErr || new Error('feed vuoto');
 }
 
+const IG_BRIDGES = ['https://rb.vern.cc/', 'https://wtf.roflcopter.fr/rss-bridge/'];
+
 async function fetchInstagram(value) {
   // dal server solo il ponte è raggiungibile (il mirror è dietro Cloudflare);
-  // l'app, all'apertura, integra comunque i profili che il ponte non copre.
+  // interroga tutte le istanze (cache indipendenti) e unisce, come fa l'app.
   const handle = value.replace(/^@/, '');
-  const xml = await get('https://rb.vern.cc/?action=display&bridge=InstagramBridge&context=Username&u=' + encodeURIComponent(handle) + '&media_type=all&format=Atom');
-  const items = parseXmlItems(xml);
+  const items = [];
+  for (const b of IG_BRIDGES) {
+    try {
+      items.push(...parseXmlItems(await get(b + '?action=display&bridge=InstagramBridge&context=Username&u=' + encodeURIComponent(handle) + '&media_type=all&format=Atom')));
+    } catch (_) {}
+  }
   if (!items.length) throw new Error('profilo non nel ponte');
   return items;
 }

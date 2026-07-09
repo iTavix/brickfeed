@@ -821,11 +821,11 @@ async function fetchRss(src, urlOverride) {
 }
 
 /* ---- Instagram (via bridge RSS pubblici; un eventuale feed personalizzato ha precedenza) ---- */
+// Istanze note funzionanti: ognuna ha una cache indipendente che si aggiorna in
+// momenti diversi — interrogarle in sequenza e unire dà sempre il post più fresco.
 const IG_BRIDGES = [
   'https://rb.vern.cc/',
-  'https://rss-bridge.org/bridge01/',
   'https://wtf.roflcopter.fr/rss-bridge/',
-  'https://feed.eugenemolotov.ru/',
 ];
 
 function cleanInstagramText(t) {
@@ -860,19 +860,18 @@ async function fetchInstagram(src) {
 }
 
 async function fetchIgFromBridges(src, urls) {
-  let lastErr;
+  // In SEQUENZA (non in parallelo): richieste simultanee sullo stesso proxy si
+  // strozzano a vicenda. Uniamo però i risultati di tutte le istanze, così la
+  // cache più fresca fa emergere il post più recente (dedup in mergeIgItems).
+  const items = [];
   for (const u of urls) {
     try {
-      const items = await fetchRss(src, u);
-      return items.map(it => ({ ...it, ...igTitleText(cleanInstagramText(it.title), cleanInstagramText(it.text)) }));
-    } catch (e) {
-      lastErr = e;
-      // feed valido ma senza post = profilo non in cache di quel ponte: gli altri
-      // daranno lo stesso esito, inutile insistere
-      if (/feed vuoto/.test(e.message)) break;
-    }
+      const r = await fetchRss(src, u);
+      for (const it of r) items.push({ ...it, ...igTitleText(cleanInstagramText(it.title), cleanInstagramText(it.text)) });
+    } catch (_) { /* istanza non disponibile: passa alla prossima */ }
   }
-  throw lastErr || new Error('nessun ponte disponibile');
+  if (!items.length) throw new Error('nessun ponte disponibile');
+  return items;
 }
 
 // Chiave di contenuto: identifica lo stesso post a prescindere dalla sorgente
