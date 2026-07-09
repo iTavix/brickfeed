@@ -962,7 +962,13 @@ async function refreshAll(silent) {
   results.forEach((r, i) => {
     const src = fetchable[i];
     if (r.status === 'fulfilled') {
-      state.cache[src.id] = { items: r.value, t: Date.now() };
+      // unione col già visto: un canale degradato (es. ponte svuotato) non deve
+      // far sparire notizie mostrate in precedenza
+      const prev = state.cache[src.id]?.items || [];
+      const ids = new Set(r.value.map(it => it.id));
+      const kept = prev.filter(p => !ids.has(p.id) && Date.now() - p.date < 30 * 864e5);
+      const merged = r.value.concat(kept).sort((a, b) => b.date - a.date).slice(0, 60);
+      state.cache[src.id] = { items: merged, t: Date.now() };
       fresh = fresh.concat(r.value);
     } else {
       state.errors[src.id] = 'Impossibile aggiornare "' + src.name + '" — riprova più tardi.';
