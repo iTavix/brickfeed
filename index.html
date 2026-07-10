@@ -623,25 +623,62 @@ const TRANSPORTS = [
   u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
   u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
 ];
-let goodTransport = 1;   // il transport che ha funzionato per ultimo passa in testa
+// Sticky PER HOST: ogni sito ha il suo transport funzionante (reddit passa da
+// allorigins, il mirror solo da corsproxy — uno sticky globale li incrocia male).
+const hostTransport = {};
 
-async function fetchText(url) {
-  const order = [goodTransport, 0, 1, 2, 3].filter((v, i, a) => a.indexOf(v) === i);
+// Coda globale: i proxy pubblici si strozzano con richieste simultanee — al
+// massimo 2 fetch in volo, le altre aspettano il turno. Le richieste con
+// priorità (tocco dell'utente, es. apertura galleria) scavalcano la fila.
+const FETCH_MAX = 2;
+let fetchActive = 0;
+const fetchWaiting = [];
+function fetchSlot(priority) {
+  return new Promise(res => {
+    if (fetchActive < FETCH_MAX) { fetchActive++; res(); }
+    else priority ? fetchWaiting.unshift(res) : fetchWaiting.push(res);
+  });
+}
+function fetchSlotDone() {
+  const next = fetchWaiting.shift();
+  // piccolo respiro tra una richiesta e la successiva: il proxy rifiuta le raffiche
+  if (next) setTimeout(next, 350); else fetchActive--;
+}
+
+async function fetchText(url, priority, validate) {
+  await fetchSlot(priority);
+  try { return await fetchTextNow(url, validate); }
+  finally { fetchSlotDone(); }
+}
+
+async function fetchTextNow(url, validate) {
+  // catena corta: il transport che funziona per QUESTO host + una riserva (7s);
+  // catene lunghe bloccano la coda e affamano le fonti in fondo
+  let host = ''; try { host = new URL(url).host; } catch (_) {}
+  const sticky = hostTransport[host] ?? 1;
+  const order = [sticky, 1, 2].filter((v, i, a) => a.indexOf(v) === i);
   let lastErr;
   for (const idx of order) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 9000);
+      const t = setTimeout(() => ctrl.abort(), 7000);
       const res = await fetch(TRANSPORTS[idx](url), { signal: ctrl.signal });
       clearTimeout(t);
       if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
       const text = await res.text();
-      if (text && text.length > 10) { goodTransport = idx; return text; }
-      lastErr = new Error('risposta vuota');
+      // una risposta-spazzatura (pagina di sfida del proxy) con status 200 NON è
+      // un successo: senza validazione avvelenerebbe anche lo sticky
+      if (text && text.length > 10 && (!validate || validate(text))) {
+        hostTransport[host] = idx;
+        return text;
+      }
+      lastErr = new Error('risposta non valida');
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('irraggiungibile');
 }
+
+const isXmlFeed = t => /^\s*(<\?xml|<feed|<rss)/i.test(t.slice(0, 300)) || /<(feed|rss)[\s>]/i.test(t.slice(0, 600));
 
 // Anti-cache a scadenza 15 minuti: evita che proxy o CDN servano copie vecchie.
 // NON usarlo sui ponti RSS-Bridge: rifiutano i parametri sconosciuti.
@@ -671,7 +708,7 @@ async function fetchReddit(src) {
   try { return await fetchRedditJson(src); }
   catch {
     // The JSON endpoint is often blocked for proxies; the Atom feed rarely is.
-    const xml = await fetchText(bust(redditBase(src.value) + '/.rss'));
+    const xml = await fetchText(bust(redditBase(src.value) + '/.rss'), false, isXmlFeed);
     return stripHtmlField(parseFeed(xml, src).map(it => ({
       ...it,
       // il feed contiene solo miniature: link diretto del post o id della miniatura → originale
@@ -689,7 +726,7 @@ async function itemImages(item) {
   if (item.images && item.images.length) return item.images;
   if (item.pixwox) {
     try {
-      const html = await fetchText(bust(item.pixwox));
+      const html = await fetchText(bust(item.pixwox), true);
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const imgs = [...new Set([...doc.querySelectorAll('img')]
         .map(im => im.getAttribute('data-src') || im.getAttribute('src') || '')
@@ -699,7 +736,7 @@ async function itemImages(item) {
   }
   if (item.gallery) {
     try {
-      const html = await fetchText(bust('https://www.reddit.com/gallery/' + item.gallery));
+      const html = await fetchText(bust('https://www.reddit.com/gallery/' + item.gallery), true);
       const names = [...new Set([...html.matchAll(/(?:preview|i)\.redd\.it\/([\w-]+\.(?:jpe?g|png|webp|gif))/gi)].map(m => m[1]))];
       // i nomi con slug "…-v0-<id>.jpg" e il file originale "<id>.jpg" hanno lo stesso id
       const ids = [...new Set(names.map(n => { const m = /-v0-([a-z0-9]+\.\w+)$/i.exec(n); return m ? m[1] : n; }))];
@@ -814,7 +851,7 @@ async function fetchRss(src, urlOverride) {
   // anti-cache solo sugli URL nostri: i ponti e i feed personalizzati passano intatti
   const wrap = urlOverride ? (u => u) : bust;
   for (const u of candidates) {
-    try { return stripHtmlField(parseFeed(await fetchText(wrap(u)), src)); }
+    try { return stripHtmlField(parseFeed(await fetchText(wrap(u), false, isXmlFeed), src)); }
     catch (e) { lastErr = e; }
   }
   throw lastErr;
@@ -828,6 +865,25 @@ const IG_BRIDGES = [
   'https://wtf.roflcopter.fr/rss-bridge/',
 ];
 
+// Memoria dei ponti inutili: se rispondono "profilo senza post" per un handle,
+// per 24h si va dritti al mirror (meno richieste, meno contesa sul proxy).
+function bridgeSkip(handle) {
+  // servono 2 giri vuoti CONSECUTIVI: le istanze si alternano, e una sola
+  // istanza senza il profilo non prova che i ponti non lo coprano
+  const e = store.get('bridgeMiss', {})[handle];
+  return !!e && e.n >= 2 && Date.now() - e.t < 864e5;
+}
+function markBridgeMiss(handle) {
+  const m = store.get('bridgeMiss', {});
+  const e = (m[handle] && m[handle].n) ? m[handle] : { n: 0 };
+  m[handle] = { n: e.n + 1, t: Date.now() };
+  store.set('bridgeMiss', m);
+}
+function clearBridgeMiss(handle) {
+  const m = store.get('bridgeMiss', {});
+  if (m[handle]) { delete m[handle]; store.set('bridgeMiss', m); }
+}
+
 function cleanInstagramText(t) {
   return (t || '')
     .replace(/follow\s+@?[\w.]+[^.!\n]*[.!]?/gi, '')      // "Follow @… for more …"
@@ -836,42 +892,50 @@ function cleanInstagramText(t) {
     .trim();
 }
 
-async function fetchInstagram(src) {
-  const handle = encodeURIComponent(src.value.replace(/^@/, ''));
+// Ponti, feed e mirror hanno cache indipendenti. Interrogarli TUTTI a ogni giro
+// satura il proxy e affama le fonti in coda: quindi ogni giro usa UN canale
+// primario (alternato) con fallback all'altro solo se non produce nulla —
+// l'unione con la cache per fonte (refreshAll) cuce i giri tra loro.
+async function fetchInstagram(src, flip) {
+  const rawHandle = src.value.replace(/^@/, '');
+  const handle = encodeURIComponent(rawHandle);
+  const missed = bridgeSkip(rawHandle);
   const bridgeUrls = [];
-  if (src.feed) bridgeUrls.push(src.feed);
-  for (const b of IG_BRIDGES) {
-    bridgeUrls.push(b + '?action=display&bridge=InstagramBridge&context=Username&u=' + handle + '&media_type=all&format=Atom');
-  }
-  // Ponti e mirror si aggiornano in momenti diversi: interroghiamo entrambi in
-  // parallelo e uniamo, così le ultime notizie compaiono da qualunque parte arrivino.
-  let [bridge, mirror] = await Promise.all([
-    fetchIgFromBridges(src, bridgeUrls).catch(() => []),
-    fetchIgMirror(src).catch(() => []),
-  ]);
-  // profili solo-mirror + intoppo transitorio del proxy = un retry con pausa salva la fonte
-  if (!bridge.length && !mirror.length) {
-    await new Promise(r => setTimeout(r, 2500));
-    mirror = await fetchIgMirror(src).catch(() => []);
-  }
-  const merged = mergeIgItems(bridge, mirror);
+  if (src.feed) bridgeUrls.push(src.feed);              // il feed personalizzato conta come ponte
+  // una sola istanza per giro, alternata; l'altra arriverà al giro successivo.
+  // Anche per i profili "non coperti" resta come ultima spiaggia (mai ciechi).
+  bridgeUrls.push(IG_BRIDGES[flip ? 1 : 0] + '?action=display&bridge=InstagramBridge&context=Username&u=' + handle + '&media_type=all&format=Atom');
+  const useBridge = async () => {
+    if (!bridgeUrls.length) return [];
+    const r = await fetchIgFromBridges(src, bridgeUrls);
+    if (r.items.length) clearBridgeMiss(rawHandle);
+    else if (r.sawEmpty) markBridgeMiss(rawHandle);      // "profilo senza post": inutile per 24h
+    return r.items;
+  };
+  const useMirror = () => fetchIgMirror(src).catch(() => []);
+  const order = (missed || flip) ? [useMirror, useBridge] : [useBridge, useMirror];
+  let items = await order[0]();
+  if (!items.length) items = await order[1]();           // fallback: l'altro canale
+  const merged = mergeIgItems(items, []);
   if (!merged.length) throw new Error('profilo non raggiungibile');
   return merged;
 }
 
 async function fetchIgFromBridges(src, urls) {
-  // In SEQUENZA (non in parallelo): richieste simultanee sullo stesso proxy si
-  // strozzano a vicenda. Uniamo però i risultati di tutte le istanze, così la
+  // Le istanze hanno cache indipendenti: uniamo i risultati di tutte, così la
   // cache più fresca fa emergere il post più recente (dedup in mergeIgItems).
+  // La coda globale di fetchText evita che si strozzino a vicenda.
   const items = [];
+  let sawEmpty = false;
   for (const u of urls) {
     try {
       const r = await fetchRss(src, u);
       for (const it of r) items.push({ ...it, ...igTitleText(cleanInstagramText(it.title), cleanInstagramText(it.text)) });
-    } catch (_) { /* istanza non disponibile: passa alla prossima */ }
+    } catch (e) {
+      if (/feed vuoto/.test(e.message || '')) sawEmpty = true;   // raggiunto, ma senza post
+    }
   }
-  if (!items.length) throw new Error('nessun ponte disponibile');
-  return items;
+  return { items, sawEmpty };
 }
 
 // Chiave di contenuto: identifica lo stesso post a prescindere dalla sorgente
@@ -917,7 +981,7 @@ async function fetchIgMirror(src) {
   let doc, host, lastErr;
   for (const h of IG_MIRRORS) {
     try {
-      const html = await fetchText(bust(h + '/profile/' + encodeURIComponent(handle) + '/'));
+      const html = await fetchText(bust(h + '/profile/' + encodeURIComponent(handle) + '/'), false, t => t.includes('class="items"'));
       const d = new DOMParser().parseFromString(html, 'text/html');
       if (d.querySelectorAll('.items .item').length) { doc = d; host = h; break; }
       lastErr = new Error('mirror senza post');
@@ -966,26 +1030,38 @@ async function refreshAll(silent) {
   document.getElementById('btnRefresh').classList.add('spinning');
   state.errors = {};
 
-  const results = await Promise.allSettled(fetchable.map(src =>
-    src.type === 'reddit' ? fetchReddit(src) :
-    src.type === 'instagram' ? fetchInstagram(src) :
-    fetchRss(src)
-  ));
+  // alternanza persistente dei canali Instagram tra un giro e l'altro
+  const tick = (store.get('refreshTick', 0) + 1) % 1000;
+  store.set('refreshTick', tick);
+
+  // unione col già visto: un canale degradato (es. ponte svuotato) non deve
+  // far sparire notizie mostrate in precedenza
+  const mergeSourceCache = (src, items) => {
+    const prev = state.cache[src.id]?.items || [];
+    const ids = new Set(items.map(it => it.id));
+    const kept = prev.filter(p => !ids.has(p.id) && Date.now() - p.date < 30 * 864e5);
+    state.cache[src.id] = { items: items.concat(kept).sort((a, b) => b.date - a.date).slice(0, 60), t: Date.now() };
+  };
+
+  const results = await Promise.allSettled(fetchable.map((src, i) => {
+    const p = src.type === 'reddit' ? fetchReddit(src) :
+              src.type === 'instagram' ? fetchInstagram(src, (tick + i) % 2 === 1) :
+              fetchRss(src);
+    // scrittura progressiva: la fonte appare in cache appena pronta, non a fine giro
+    return p.then(items => { mergeSourceCache(src, items); persistLocal(); return items; });
+  }));
 
   let fresh = [];
   results.forEach((r, i) => {
     const src = fetchable[i];
     if (r.status === 'fulfilled') {
-      // unione col già visto: un canale degradato (es. ponte svuotato) non deve
-      // far sparire notizie mostrate in precedenza
-      const prev = state.cache[src.id]?.items || [];
-      const ids = new Set(r.value.map(it => it.id));
-      const kept = prev.filter(p => !ids.has(p.id) && Date.now() - p.date < 30 * 864e5);
-      const merged = r.value.concat(kept).sort((a, b) => b.date - a.date).slice(0, 60);
-      state.cache[src.id] = { items: merged, t: Date.now() };
       fresh = fresh.concat(r.value);
     } else {
-      state.errors[src.id] = 'Impossibile aggiornare "' + src.name + '" — riprova più tardi.';
+      // banner solo se la fonte è davvero a secco: con la cache il feed resta
+      // pieno e un intoppo transitorio si riassorbe al giro successivo
+      if (!(state.cache[src.id]?.items || []).length) {
+        state.errors[src.id] = 'Impossibile aggiornare "' + src.name + '" — riprova più tardi.';
+      }
       console.warn('fetch failed for source', src.id, r.reason);
     }
   });
