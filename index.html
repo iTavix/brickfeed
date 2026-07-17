@@ -625,7 +625,9 @@ const TRANSPORTS = [
 ];
 // Sticky PER HOST: ogni sito ha il suo transport funzionante (reddit passa da
 // allorigins, il mirror solo da corsproxy — uno sticky globale li incrocia male).
-const hostTransport = {};
+// Persistito: al prossimo avvio si riparte dal transport giusto senza bruciare
+// timeout da 7s per riscoprirlo.
+const hostTransport = store.get('hostT', {});
 
 // Coda globale: i proxy pubblici si strozzano con richieste simultanee — al
 // massimo 2 fetch in volo, le altre aspettano il turno. Le richieste con
@@ -669,7 +671,7 @@ async function fetchTextNow(url, validate) {
       // una risposta-spazzatura (pagina di sfida del proxy) con status 200 NON è
       // un successo: senza validazione avvelenerebbe anche lo sticky
       if (text && text.length > 10 && (!validate || validate(text))) {
-        hostTransport[host] = idx;
+        if (hostTransport[host] !== idx) { hostTransport[host] = idx; store.set('hostT', hostTransport); }
         return text;
       }
       lastErr = new Error('risposta non valida');
@@ -682,7 +684,10 @@ const isXmlFeed = t => /^\s*(<\?xml|<feed|<rss)/i.test(t.slice(0, 300)) || /<(fe
 
 // Anti-cache a scadenza 15 minuti: evita che proxy o CDN servano copie vecchie.
 // NON usarlo sui ponti RSS-Bridge: rifiutano i parametri sconosciuti.
-const bust = u => u + (u.includes('?') ? '&' : '?') + 'bfcb=' + Math.floor(Date.now() / 9e5);
+// bustEpoch: nei giri innescati da una notifica push il bucket da 15 min non
+// basta (la copia del proxy può non avere ancora il post): si forza una copia fresca.
+let bustEpoch = 0;
+const bust = u => u + (u.includes('?') ? '&' : '?') + 'bfcb=' + (bustEpoch || Math.floor(Date.now() / 9e5));
 
 function stripHtml(html) {
   const doc = new DOMParser().parseFromString(html || '', 'text/html');
@@ -1022,10 +1027,37 @@ function igTitleText(title, text) {
 }
 
 /* ---- Refresh all ---- */
-async function refreshAll(silent) {
+// Render progressivo durante il giro: ogni fonte compare nel feed appena i suoi
+// dati arrivano, senza aspettare la fonte più lenta.
+let progTimer = 0;
+function progressiveRender() {
+  if (progTimer) return;
+  progTimer = setTimeout(() => {
+    progTimer = 0;
+    if (!state.refreshing) return;        // il render finale del giro è già passato
+    if (state.tab === 'feed') renderFeed();
+    updateBadges();
+  }, 200);
+}
+
+async function refreshAll(silent, prioIds) {
   if (state.refreshing) return;
-  const fetchable = state.sources.filter(isFetchable);
+  let fetchable = state.sources.filter(isFetchable);
   if (!fetchable.length) { render(); return; }
+  const prio = new Set(prioIds || []);
+  // refresh silenziosi (riapertura, poll): le fonti aggiornate da meno di 90s
+  // non si ritoccano — la coda resta libera per quelle davvero stantie
+  if (silent && !prio.size) {
+    const stale = fetchable.filter(s => Date.now() - (state.cache[s.id]?.t || 0) > 90e3);
+    if (!stale.length) { render(); return; }
+    fetchable = stale;
+  }
+  // le fonti indicate dalla notifica push entrano in coda per prime:
+  // sono le prime a essere scaricate e le prime a comparire nel feed
+  if (prio.size) {
+    fetchable = [...fetchable].sort((a, b) => (prio.has(b.id) ? 1 : 0) - (prio.has(a.id) ? 1 : 0));
+    bustEpoch = Date.now();
+  }
   state.refreshing = true;
   document.getElementById('btnRefresh').classList.add('spinning');
   state.errors = {};
@@ -1047,9 +1079,10 @@ async function refreshAll(silent) {
     const p = src.type === 'reddit' ? fetchReddit(src) :
               src.type === 'instagram' ? fetchInstagram(src, (tick + i) % 2 === 1) :
               fetchRss(src);
-    // scrittura progressiva: la fonte appare in cache appena pronta, non a fine giro
-    return p.then(items => { mergeSourceCache(src, items); persistLocal(); return items; });
+    // scrittura progressiva: la fonte appare in cache E nel feed appena pronta, non a fine giro
+    return p.then(items => { mergeSourceCache(src, items); persistLocal(); progressiveRender(); return items; });
   }));
+  bustEpoch = 0;
 
   let fresh = [];
   results.forEach((r, i) => {
@@ -2133,7 +2166,13 @@ function startPolling() {
   pollTimer = setInterval(() => refreshAll(true), Math.max(5, state.settings.poll) * 60000);
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && state.sources.length) { refreshAll(true); ensurePushSynced(); }
+  if (!document.hidden && state.sources.length) {
+    // piccolo ritardo: se il ritorno in primo piano viene dal tocco su una
+    // notifica, il messaggio del service worker (con le fonti prioritarie)
+    // deve arrivare prima e vincere la corsa su questo refresh generico
+    setTimeout(() => refreshAll(true), 400);
+    ensurePushSynced();
+  }
 });
 
 /* ============================== Boot ============================== */
@@ -2141,13 +2180,21 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
   // messaggi dal service worker: nuova notizia arrivata / iscrizione da risalvare
   navigator.serviceWorker.addEventListener('message', e => {
-    if (e.data?.type === 'bf-refresh') { if (state.sources.length) refreshAll(false); }
+    if (e.data?.type === 'bf-refresh') { if (state.sources.length) refreshAll(false, e.data.srcs); }
     else if (e.data?.type === 'bf-resubscribe') { syncedEndpoint = null; ensurePushSynced(); }
   });
   navigator.serviceWorker.ready.then(() => ensurePushSynced());
 }
 render();
-if (state.sources.length) refreshAll(true);
+// App aperta dal tocco su una notifica (a freddo): l'URL porta gli id delle
+// fonti con le novità (#bfsrc=…) — vengono scaricate e mostrate per prime.
+const bootPrio = (() => {
+  const m = /[#&?]bfsrc=([^&#]+)/.exec(location.href);
+  if (!m) return undefined;
+  history.replaceState(null, '', location.pathname + location.search);
+  return decodeURIComponent(m[1]).split(',').filter(Boolean);
+})();
+if (state.sources.length) refreshAll(true, bootPrio);
 startPolling();
 </script>
 </body>

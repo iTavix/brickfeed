@@ -1,4 +1,4 @@
-const CACHE = 'brickfeed-v3';
+const CACHE = 'brickfeed-v4';
 const VAPID_PUBLIC = 'BKodQ5y7xAtsmjFySGu-mDiMrKJVK4uVhDpNAsbgTy5zUaSUglRrPJo3Vjm6FtJp7H0Y85lYsVF6bZVgWYkVnMU';
 
 function vapidKey() {
@@ -7,10 +7,10 @@ function vapidKey() {
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
-// avvisa le finestre aperte di ricaricare il feed
-async function tellClients(type) {
+// avvisa le finestre aperte di ricaricare il feed (extra: es. fonti prioritarie)
+async function tellClients(type, extra) {
   const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  list.forEach(c => c.postMessage({ type }));
+  list.forEach(c => c.postMessage(Object.assign({ type }, extra)));
 }
 const SHELL = [
   './',
@@ -44,20 +44,24 @@ self.addEventListener('push', e => {
       icon: 'icons/icon-192.png',
       badge: 'icons/icon-192.png',
       tag: 'brickfeed-push',
-      data: { url: d.url || './' },
+      data: { url: d.url || './', srcs: d.srcs || [] },
     });
-    await tellClients('bf-refresh');     // se l'app è aperta, aggiorna subito il feed
+    // se l'app è aperta, aggiorna subito il feed partendo dalle fonti con le novità
+    await tellClients('bf-refresh', { srcs: d.srcs || [] });
   })());
 });
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   e.waitUntil((async () => {
+    const srcs = e.notification.data?.srcs || [];
     const list = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of list) {
-      if ('focus' in c) { c.postMessage({ type: 'bf-refresh' }); return c.focus(); }
+      if ('focus' in c) { c.postMessage({ type: 'bf-refresh', srcs }); return c.focus(); }
     }
-    return clients.openWindow(e.notification.data?.url || './');
+    // avvio a freddo: le fonti con le novità viaggiano nell'URL (#bfsrc=…)
+    const url = (e.notification.data?.url || './') + (srcs.length ? '#bfsrc=' + srcs.join(',') : '');
+    return clients.openWindow(url);
   })());
 });
 

@@ -166,7 +166,7 @@ for (const doc of snap.docs) {
         allKeys.push(k);
         // niente notifiche per roba più vecchia di 2 giorni (quando la data c'è)
         if (!notified.has(k) && (!it.date || Date.now() - it.date < 48 * 36e5)) {
-          fresh.push({ title, k });
+          fresh.push({ title, k, srcId: src.id });
         }
       }
     } catch (e) { console.log(doc.id, '— fonte', src.type, 'fallita:', e.message); }
@@ -181,6 +181,8 @@ for (const doc of snap.docs) {
     const payload = JSON.stringify({
       title: newItems.length === 1 ? 'Nuova notizia' : newItems.length + ' nuove notizie',
       body, url: APP_URL,
+      // id delle fonti con le novità: l'app le aggiorna (e mostra) per prime
+      srcs: [...new Set(newItems.map(f => f.srcId))].filter(Boolean),
     });
     for (const [devId, sub] of subEntries) {
       try {
